@@ -1,0 +1,3 @@
+sim/rom/
+*.tmp
+/build/
