@@ -21,7 +21,8 @@ end
 
 function M.case(name, fn)
     current = name
-    local ok, err = pcall(fn)
+    local runner = rawget(_G, "__nativePcall") or pcall
+    local ok, err = runner(fn)
     if ok then
         passed = passed + 1
         io.write("PASS  " .. name .. "\n")

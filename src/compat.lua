@@ -128,7 +128,7 @@ function M.setBreathEvery(n)
 end
 
 function M.yieldNow()
-    if not M.isCC() then return end
+    if not M.isCC() or not coroutine.running() then return end
     os.queueEvent("zn_breathe")
     while true do
         local ev = os.pullEventRaw()
