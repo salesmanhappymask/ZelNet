@@ -119,10 +119,19 @@ function M.version()
     return version.program, version.protocol
 end
 
+function M.uikit()
+    return need("ui")
+end
+
 M.util = {
     parseAddress = util.parseAddress,
     normAddress = util.normAddress,
     fmtFixed = util.fmtFixed,
+    fmtTrim = util.fmtTrim,
+    fmtAmount = util.fmtAmount,
+    fmtDuration = util.fmtDuration,
+    fmtStamp = util.fmtStamp,
+    fitText = util.fitText,
     wrapText = util.wrapText,
 }
 

@@ -118,7 +118,7 @@ A node drops a frame if any field has the wrong type, if `net` is not its networ
 d = { realm = "MARS", root = 12, seq = 381, hops = 0, ver = 1, mac = "<hex>" }
 ```
 
-`mac = HMAC(realmKey, "b|" .. realm .. "|" .. root .. "|" .. seq)`. Hop count is not covered by the MAC because routers change it. The server sends one beacon every 10 s. Routers forward each new `seq` once with `hops + 1`.
+`mac = HMAC(HMAC(realmKey, "zn-mac"), "b|" .. realm .. "|" .. root .. "|" .. seq)`. Hop count is not covered by the MAC because routers change it. The server sends one beacon every 10 s. Routers forward each new `seq` once with `hops + 1`.
 
 Parent selection: newest `seq` first, then lowest `hops`, then the strongest link (BitNet beats modem only if no modem neighbor offers the same hop count), then the lowest sender id.
 
@@ -138,8 +138,9 @@ Sealed form on the wire, `d` of the frame:
 
 * `dir` is `u` (towards the server) or `d` (away from the server).
 * `dev` is the device name, which tells the server which device key to use. On downward packets it names the receiving device.
-* `ct = base64(RC4drop768(SHA256(deviceKey .. n), serialize(body)))`.
-* `mac = HMAC(deviceKey, table.concat({ v, id, src, dst, port, dir, dev, re or "", rq and "1" or "", n, ct }, "|"))`.
+* Keys are separated per purpose: `encKey = HMAC(deviceKey, "zn-enc")` and `macKey = HMAC(deviceKey, "zn-mac")` (hex keys, HMAC-SHA-256).
+* `ct = base64(RC4drop768(SHA256(encKey .. n), codec(body)))`, where `n` is a random 16 byte nonce in hex and `codec` is ZelNet's ASCII safe serializer.
+* `aad = table.concat({ v, id, src, dst, port, dir, dev, re or "", rq and "1" or "" }, "|")` and `mac = HMAC(macKey, aad .. "|" .. n .. "|" .. ct)`.
 * Body size limit after serialization: 8192 bytes.
 * Routers decrement `ttl` and drop the packet at 0. They never change any other field.
 
@@ -151,8 +152,8 @@ The server accepts an upward packet only if the MAC verifies with the key of the
 { v = 1, id = "...", src = "MARS:42", dst = "EARTH:7", port = "power", ttl = 24, re = nil, rq = nil, via = "MARS", ct = "<cipher block base64>", mac = "<64 hex>" }
 ```
 
-* `ct = cipher.encrypt(serialize({ n = <32 hex nonce>, t = <sender clock>, b = body }))`.
-* `mac = HMAC(backboneKey, table.concat({ v, id, src, dst, port, re or "", rq and "1" or "", ct }, "|"))`.
+* `ct = cipher.encrypt(codec({ n = <32 hex nonce>, t = <sender clock>, b = body }))` using the Computronics Cipher Block (AES-128-CBC, Base64 output).
+* `mac = HMAC(HMAC(backboneKey, "zn-mac"), table.concat({ v, id, src, dst, port, re or "", rq and "1" or "" }, "|") .. "|" .. ct)`.
 * Body size limit: 32768 bytes.
 * `via` is the realm that last forwarded the packet. It is not covered by the MAC and only feeds split horizon and diagnostics.
 * A server forwards a backbone packet for another realm without decrypting it. The final server checks the MAC, decrypts, rejects a nonce it saw in the last 30 minutes, and delivers.
@@ -161,7 +162,7 @@ The server accepts an upward packet only if the MAC verifies with the key of the
 Hello frames (`k = "h"`):
 
 ```lua
-d = { realm = "MARS", id = 12, main = false, ver = 1, prog = "1.0.0", seq = 77, mac = HMAC(backboneKey, "h|" .. realm .. "|" .. id .. "|" .. seq) }
+d = { realm = "MARS", id = 12, main = false, ver = 1, prog = "1.0.0", seq = 77, fp = "<cipher fingerprint>", mac = HMAC(HMAC(backboneKey, "zn-mac"), "h|" .. realm .. "|" .. id .. "|" .. seq .. "|" .. fp) }
 ```
 
 ## 8. Reserved ports

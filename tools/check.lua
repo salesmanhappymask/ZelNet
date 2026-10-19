@@ -31,7 +31,11 @@ local function report(file, line, msg)
 end
 
 local manifest = readFile(root .. "/src/MODULES") or ""
-for name in manifest:gmatch("[%w_]+") do
+local only = {}
+for i = 2, #arg do only[#only + 1] = arg[i]:match("([%w_]+)%.lua$") or arg[i] end
+local names = {}
+if #only > 0 then names = only else for name in manifest:gmatch("[%w_]+") do names[#names + 1] = name end end
+for _, name in ipairs(names) do
     local path = root .. "/src/" .. name .. ".lua"
     local src = readFile(path)
     if not src then
