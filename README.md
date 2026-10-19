@@ -84,7 +84,7 @@ lua5.1 tools/check.lua .
 lua5.1 tools/build.lua . build/zelnet
 ```
 
-Tests run with `lua5.1 tests/<name>.lua`. `sim/` contains a ComputerCraft 1.63 world simulator used by the scenario tests; it needs the CC 1.63 ROM copied into `sim/rom` (not included).
+Tests run with `lua5.1 tests/<name>.lua`. `sim/` contains a ComputerCraft 1.63 world simulator used by the scenario tests. It runs the real CC 1.63 ROM, which is not stored in the repo; extract it from the mod jar once with `tools/extract_rom.sh path/to/ComputerCraft1.63.jar`.
 
 ## Documents
 
