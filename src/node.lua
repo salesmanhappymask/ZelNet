@@ -489,7 +489,7 @@ end
 function Node:deliver(pkt)
     if self.seen.check("p" .. pkt.id) then return end
     self:count("delivered")
-    if pkt.re and self.pending[pkt.re] then
+    if pkt.re and self.pending[pkt.re] and pkt.port ~= "zn.err" then
         local p = self.pending[pkt.re]
         self.pending[pkt.re] = nil
         p.done, p.body, p.src = true, pkt.body, pkt.src

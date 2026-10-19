@@ -1,44 +1,76 @@
 local M = {}
 
-local create, resume, yield, status = coroutine.create, coroutine.resume, coroutine.yield, coroutine.status
 local nativePcall = pcall
+local nativeGetmetatable = getmetatable
 
-local performResume
+function M.new(opts)
+    opts = opts or {}
+    local create = opts.create or coroutine.create
+    local resume = opts.resume or coroutine.resume
+    local yield = opts.yield or coroutine.yield
+    local status = opts.status or coroutine.status
+    local intercept = opts.intercept
 
-local function handleReturn(handler, co, ok, ...)
-    if not ok then
-        return false, handler((...))
+    local performResume
+
+    local function handleReturn(handler, co, ok, ...)
+        if not ok then
+            local err = (...)
+            if intercept then intercept(err) end
+            if handler then
+                local hok, hres = nativePcall(handler, err)
+                if hok then return false, hres end
+                return false, "error in error handling"
+            end
+            return false, err
+        end
+        if status(co) == "suspended" then
+            return performResume(handler, co, yield(...))
+        end
+        return true, ...
     end
-    if status(co) == "suspended" then
-        return performResume(handler, co, yield(...))
+
+    performResume = function(handler, co, ...)
+        return handleReturn(handler, co, resume(co, ...))
     end
-    return true, ...
+
+    local function callable(f)
+        if type(f) == "function" then return f end
+        local mt = nativeGetmetatable(f)
+        if type(mt) == "table" and mt.__call ~= nil then
+            return function(...) return f(...) end
+        end
+        return nil
+    end
+
+    local api = {}
+
+    function api.pcall(f, ...)
+        local fn = callable(f)
+        if not fn then return nativePcall(f, ...) end
+        return performResume(nil, create(fn), ...)
+    end
+
+    function api.xpcall(f, handler, ...)
+        local fn = callable(f)
+        if not fn then
+            local ok, err = nativePcall(f)
+            if handler then
+                local hok, hres = nativePcall(handler, err)
+                if hok then return false, hres end
+                return false, "error in error handling"
+            end
+            return ok, err
+        end
+        return performResume(handler or function(e) return e end, create(fn), ...)
+    end
+
+    return api
 end
 
-performResume = function(handler, co, ...)
-    return handleReturn(handler, co, resume(co, ...))
-end
-
-function M.xpcall(f, handler, ...)
-    if type(f) ~= "function" then
-        local ok, err = nativePcall(f)
-        return ok, err
-    end
-    local args = { ... }
-    local n = select("#", ...)
-    local co = create(function() return f(unpack(args, 1, n)) end)
-    return performResume(handler or function(e) return e end, co)
-end
-
-function M.pcall(f, ...)
-    if type(f) ~= "function" then
-        return nativePcall(f, ...)
-    end
-    local args = { ... }
-    local n = select("#", ...)
-    local co = create(function() return f(unpack(args, 1, n)) end)
-    return performResume(function(e) return e end, co)
-end
+local default = M.new()
+M.pcall = default.pcall
+M.xpcall = default.xpcall
 
 function M.install(env)
     env = env or _G
