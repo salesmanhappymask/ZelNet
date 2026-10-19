@@ -1,6 +1,7 @@
 local need = ...
 local compat = need("compat")
 local util = need("util")
+local codec = need("codec")
 local crypto = need("crypto")
 local version = need("version")
 local registry = need("registry")
@@ -10,7 +11,9 @@ local M = {}
 M.FILE = "directory.db"
 M.REGISTER_INTERVAL = 300
 M.PUSH_DELAY = 2
-M.MAX_USERS = 2000
+M.MAX_USERS = 1000
+M.MAX_REALMS = 64
+M.BODY_BUDGET = 30000
 
 local Directory = {}
 Directory.__index = Directory
@@ -152,6 +155,11 @@ function Directory:save()
     return ok
 end
 
+function Directory:fits()
+    local text = codec.encode(self:snapshot())
+    return text ~= nil and #text <= M.BODY_BUDGET
+end
+
 function Directory:changed()
     self.ver = self.ver + 1
     self:save()
@@ -230,6 +238,11 @@ function Directory:applyClaim(srcRealm, body)
     if cur == realm then return { ok = true, user = u, realm = realm } end
     if util.count(self.users) >= M.MAX_USERS then return { ok = false, err = "full" } end
     self.users[u] = realm
+    if not self:fits() then
+        self.users[u] = nil
+        self.log.warn("directory full, claim for " .. u .. " refused")
+        return { ok = false, err = "full" }
+    end
     self:changed()
     return { ok = true, user = u, realm = realm }
 end
@@ -256,6 +269,11 @@ function Directory:applyRename(srcRealm, body)
     if self.users[new] then return { ok = false, err = "taken" } end
     self.users[new] = cur
     self.users[old] = nil
+    if not self:fits() then
+        self.users[old] = cur
+        self.users[new] = nil
+        return { ok = false, err = "full" }
+    end
     self:changed()
     return { ok = true, user = new, realm = cur }
 end
@@ -264,6 +282,7 @@ function Directory:applyRegister(srcRealm, body)
     local realm = util.normRealm(body.realm) or srcRealm
     if realm ~= srcRealm then return { ok = false, err = "denied" } end
     local rec = self.realms[realm]
+    if not rec and util.count(self.realms) >= M.MAX_REALMS then return { ok = false, err = "full" } end
     local sid = tonumber(body.serverId)
     local prog = type(body.prog) == "string" and util.sanitize(body.prog):sub(1, 16) or nil
     local fresh = not rec or rec.serverId ~= sid or rec.prog ~= prog

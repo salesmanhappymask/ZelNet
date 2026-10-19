@@ -17,7 +17,7 @@ Registry.__index = Registry
 function M.storageReady(ctx)
     local st = ctx and ctx.storage
     if type(st) ~= "table" or type(st.ready) ~= "function" then return false end
-    local ok, ready = pcall(st.ready, st)
+    local ok, ready = pcall(st.ready, st, M.ROLE)
     return ok and ready == true
 end
 
@@ -85,6 +85,7 @@ function M.new(ctx)
     self.aliasIndex = {}
     self.rt = {}
     self.dirty = false
+    self.stale = false
     self.waitStorage = false
     self.source = "memory"
     self.saves = 0
@@ -151,9 +152,9 @@ function Registry:adoptStorage()
     end
     self.waitStorage = false
     self.source = "storage"
+    self.dirty = true
     self:reindex()
     self.log.info("device registry moved to storage")
-    self:save()
     return true
 end
 
@@ -173,6 +174,7 @@ function Registry:save()
     self.saves = self.saves + 1
     if ok then
         self.dirty = false
+        self.stale = false
         self.source = where
         if err then self.lastError = tostring(err) end
     else
@@ -186,9 +188,9 @@ function Registry:markDirty()
     self.dirty = true
 end
 
-function Registry:flush()
-    if self.waitStorage and M.storageReady(self.ctx) then return self:adoptStorage() end
-    if self.dirty then return self:save() end
+function Registry:flush(force)
+    if self.waitStorage and M.storageReady(self.ctx) then self:adoptStorage() end
+    if self.dirty or (force and self.stale) then return self:save() end
     return true
 end
 
@@ -299,7 +301,7 @@ function Registry:touch(name, info)
         if info.parent ~= nil then rec.parent = info.parent end
     end
     rec.lastSeen = compat.stamp()
-    self.dirty = true
+    self.stale = true
     if rec.status ~= "online" and rec.status ~= "revoked" then
         rec.status = "online"
         return true
@@ -310,8 +312,12 @@ end
 function Registry:setInfo(name, fields)
     local rec = self.devices[name]
     if not rec then return false end
-    for k, v in pairs(fields) do rec[k] = v end
-    self.dirty = true
+    for k, v in pairs(fields) do
+        if rec[k] ~= v then
+            rec[k] = v
+            self.dirty = true
+        end
+    end
     return true
 end
 
@@ -359,7 +365,7 @@ function Registry:sweep(window)
         if rec.status == "online" and not self:isOnline(name, now) then
             rec.status = "offline"
             gone[#gone + 1] = name
-            self.dirty = true
+            self.stale = true
         end
     end
     return gone

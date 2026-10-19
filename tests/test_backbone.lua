@@ -416,4 +416,230 @@ t.case("network update: offer, chunk download, install and device offers", funct
     end, 20000)
 end)
 
+t.case("device to device across realms: requests, names, errors and pub/sub", function()
+    fs.delete("/.zelnet")
+    kit.reset()
+    local earth, en = server(1, "EARTH", "main", { "left", "top" })
+    local mars, mn = server(2, "MARS", "satellite", { "right", "back" })
+    kit.connect(en, "left", mn, "right")
+    local da = kit.newDevice(earth, "client", "alice", 42, { "bottom" })
+    local db = kit.newDevice(mars, "endpoint", "probe", 43, { "front" })
+    kit.connect(en, "top", da, "bottom")
+    kit.connect(mn, "back", db, "front")
+    kit.runAll({ en, mn, da, db }, function()
+        db:listen("echo", function(msg) db:reply(msg, { back = msg.data, src = msg.src }) end)
+        t.ok(kit.waitFor(function() return earth.bb:reachable("MARS") and da:isConnected() and db:isConnected() end, 120), "network up")
+        local body, src = da:request("MARS:43", "echo", "hi", 40)
+        t.eq(src, "MARS:43")
+        t.eq(body and body.back, "hi")
+        t.eq(body and body.src, "EARTH:42")
+        t.eq(db:register("powermon"), true)
+        body = da:request("mars:powermon", "echo", "named", 40)
+        t.eq(body and body.back, "named")
+        t.eq(da:resolve("MARS:powermon"), "MARS:43")
+        local _, err = da:request("MARS:ghost", "echo", 1, 40)
+        t.eq(err, "unknown_node")
+        local _, err2 = da:request("NOWHERE:1", "echo", 1, 40)
+        t.eq(err2, "no_route")
+        local got
+        da:subscribe("sensor.*", function(topic, data, from) got = { topic, data, from } end)
+        sleep(2)
+        db:publish("sensor.temp", { c = 21 }, { retain = true })
+        t.ok(kit.waitFor(function() return got ~= nil end, 30), "publish crossed realms")
+        t.eq(got[1], "sensor.temp")
+        t.eq(got[2].c, 21)
+        t.eq(got[3], "MARS:43")
+        t.eq(earth.topics["sensor.temp"].retained.from, "MARS:43")
+        t.ok(da:ping("MARS:43", 40) ~= nil, "cross realm ping")
+        t.ok(mars.counters.routedDown >= 3)
+        t.ok(earth.bb.counters.delivered >= 3)
+    end, 20000)
+end)
+
+t.case("triangle: floods arrive once per realm and routes go around a cut link", function()
+    fs.delete("/.zelnet")
+    kit.reset()
+    local earth, en = server(1, "EARTH", "main", { "left" })
+    local mars, mn = server(2, "MARS", "satellite", { "right" })
+    local venus, vn = server(3, "VENUS", "satellite", { "front" })
+    kit.connect(en, "left", mn, "right")
+    kit.connect(en, "left", vn, "front")
+    kit.connect(mn, "right", vn, "front")
+    local hits = { EARTH = 0, MARS = 0, VENUS = 0 }
+    for realm, nd in pairs({ EARTH = en, MARS = mn, VENUS = vn }) do
+        nd:listen("bcast", function() hits[realm] = hits[realm] + 1 end)
+    end
+    kit.runAll({ en, mn, vn }, function()
+        mn:listen("echo", function(msg) mn:reply(msg, { ok = true }) end)
+        t.ok(kit.waitFor(function()
+            return earth.bb:metricTo("MARS") == 1 and earth.bb:metricTo("VENUS") == 1 and mars.bb:metricTo("VENUS") == 1
+        end, 120), "full mesh")
+        earth:broadcastRealms("bcast", { n = 1 })
+        sleep(5)
+        t.eq(hits.MARS, 1)
+        t.eq(hits.VENUS, 1)
+        t.eq(hits.EARTH, 0)
+        kit.cutPair("left", "right", true)
+        t.ok(kit.waitFor(function() return earth.bb:metricTo("MARS") == 2 end, 200), "rerouted through VENUS")
+        local via
+        for _, r in ipairs(earth:status().routes) do
+            if r.realm == "MARS" then via = r.via end
+        end
+        t.eq(via, "VENUS")
+        local body = en:request("MARS", "echo", 1, 40)
+        t.eq(body and body.ok, true)
+        t.ok(venus.bb.counters.forwarded >= 2)
+        t.eq(earth.bb:routesFor("radio:VENUS").MARS, 16, "poisoned reverse towards the next hop")
+        kit.cutPair("left", "right", false)
+        t.ok(kit.waitFor(function() return earth.bb:metricTo("MARS") == 1 end, 200), "direct route back")
+    end, 20000)
+end)
+
+t.case("replayed and older hellos are ignored", function()
+    fs.delete("/.zelnet")
+    kit.reset()
+    local earth, en = server(1, "EARTH", "main", { "left" })
+    kit.runAll({ en }, function()
+        local d = { realm = "PLUTO", id = 9, main = false, ver = 1, prog = "1.0.0", seq = 100, fp = earth.bb.fp }
+        d.mac = seal.helloMac(BKEY, d)
+        local function push(data)
+            en.inq.push({ f = frame.make(en.cfg.netId, "h", 9, nil, util.deepCopy(data)), link = "modem:left", dist = 3 })
+            en:wake()
+            sleep(1)
+        end
+        push(d)
+        t.eq(earth.bb.neighbors["radio:PLUTO"].up, true)
+        local hellos = earth.bb.counters.hellos
+        push(d)
+        local old = { realm = "PLUTO", id = 9, main = false, ver = 1, prog = "1.0.0", seq = 50, fp = earth.bb.fp }
+        old.mac = seal.helloMac(BKEY, old)
+        push(old)
+        t.eq(earth.bb.counters.hellos, hellos, "replayed hello accepted")
+        local spoofId = util.deepCopy(d)
+        spoofId.seq = 101
+        spoofId.mac = seal.helloMac(BKEY, spoofId)
+        en.inq.push({ f = frame.make(en.cfg.netId, "h", 10, nil, spoofId), link = "modem:left", dist = 3 })
+        en:wake()
+        sleep(1)
+        t.eq(earth.bb.counters.hellos, hellos, "hello relayed by another computer accepted")
+        local names = {}
+        for _, r in ipairs(earth:realms()) do names[#names + 1] = r.realm end
+        t.ok(util.contains(names, "PLUTO"), "neighbor realm missing from realms()")
+    end, 2000)
+end)
+
+local function bridgeWorld()
+    local w = { drives = {}, tess = {}, order = {}, nextDisk = 100 }
+    local function filesUnder(mount)
+        local prefix = "/" .. mount .. "/"
+        local out = {}
+        for k, v in pairs(env.files()) do
+            if k:sub(1, #prefix) == prefix then out[k:sub(#prefix + 1)] = v end
+        end
+        return out
+    end
+    local function writeFiles(mount, files)
+        fs.makeDir("/" .. mount)
+        for name, data in pairs(files) do
+            local h = fs.open("/" .. mount .. "/" .. name, "w")
+            h.write(data)
+            h.close()
+        end
+    end
+    function w.drive(name, mount)
+        local d = { name = name, mount = mount }
+        w.drives[name] = d
+        env.setPeripheral(name, { type = "drive", methods = {
+            isDiskPresent = function() return d.disk ~= nil end,
+            getMountPath = function() if d.disk then return d.mount end return nil end,
+            hasData = function() return d.disk ~= nil end,
+            getDiskID = function() return d.disk and d.disk.id end,
+            getDiskLabel = function() return d.disk and d.disk.label end,
+            setDiskLabel = function(l) if d.disk then d.disk.label = l end end,
+            ejectDisk = function() end,
+        } })
+    end
+    function w.insert(driveName)
+        w.nextDisk = w.nextDisk + 1
+        w.drives[driveName].disk = { id = w.nextDisk }
+        fs.makeDir("/" .. w.drives[driveName].mount)
+    end
+    function w.tesseract(name, freq, dir, driveName)
+        local tt = { name = name, freq = freq, dir = dir, drive = w.drives[driveName] }
+        w.tess[name] = tt
+        w.order[#w.order + 1] = name
+        env.setPeripheral(name, { type = "cofh_thermalexpansion_tesseract", methods = {
+            pullItem = function(pdir)
+                sleep(0.05)
+                if pdir ~= tt.dir or not tt.drive.disk then return 0 end
+                for _, other in ipairs(w.order) do
+                    local o = w.tess[other]
+                    if o ~= tt and o.freq == tt.freq and not o.drive.disk then
+                        local files = filesUnder(tt.drive.mount)
+                        pcall(fs.delete, "/" .. tt.drive.mount)
+                        o.drive.disk = tt.drive.disk
+                        tt.drive.disk = nil
+                        writeFiles(o.drive.mount, files)
+                        return 1
+                    end
+                end
+                return 0
+            end,
+            pushItem = function() return 0 end,
+            getFrequency = function() return tt.freq end,
+        } })
+    end
+    function w.clear()
+        for name in pairs(w.drives) do env.setPeripheral(name, nil) end
+        for name in pairs(w.tess) do env.setPeripheral(name, nil) end
+    end
+    return w
+end
+
+t.case("the real bridge module carries backbone traffic between two servers", function()
+    fs.delete("/.zelnet")
+    for _, m in ipairs({ "/disk", "/disk2", "/disk3", "/disk4" }) do fs.delete(m) end
+    kit.reset()
+    local w = bridgeWorld()
+    w.drive("drive_0", "disk")
+    w.drive("drive_1", "disk2")
+    w.drive("drive_2", "disk3")
+    w.drive("drive_3", "disk4")
+    w.tesseract("tesseract_0", 1, "east", "drive_0")
+    w.tesseract("tesseract_1", 2, "up", "drive_1")
+    w.tesseract("tesseract_2", 2, "west", "drive_2")
+    w.tesseract("tesseract_3", 1, "down", "drive_3")
+    w.insert("drive_0")
+    w.insert("drive_2")
+    local eb = { peer = "MARS", sendTess = "tesseract_0", sendDrive = "drive_0", sendDir = "east",
+        recvTess = "tesseract_1", recvDrive = "drive_1", recvDir = "up", settle = 0.3, poll = 0.5 }
+    local mb = { peer = "EARTH", sendTess = "tesseract_2", sendDrive = "drive_2", sendDir = "west",
+        recvTess = "tesseract_3", recvDrive = "drive_3", recvDir = "down", settle = 0.3, poll = 0.5 }
+    local earth, en = server(1, "EARTH", "main", {}, { cfg = { bridges = { eb } } })
+    local mars, mn = server(2, "MARS", "satellite", {}, { cfg = { bridges = { mb } } })
+    local ok, perr = pcall(function()
+        kit.runAll({ en, mn }, function()
+            mn:listen("echo", function(msg) mn:reply(msg, { pong = msg.data }) end)
+            t.ok(kit.waitFor(function() return earth.bb:reachable("MARS") and mars.bb:reachable("EARTH") end, 300), "bridge route up")
+            t.eq(earth.bb:metricTo("MARS"), 4)
+            local body = en:request("MARS", "echo", "through the tesseract", 60)
+            t.eq(body and body.pong, "through the tesseract")
+            t.ok(kit.waitFor(function() return mars.dir.synced and earth.dir.realms.MARS ~= nil end, 120), "satellite registered over the bridge")
+            t.eq(mars:claimUser("zed"), true)
+            t.eq(earth:userHome("zed"), "MARS")
+            local bs = earth:status().bridges[1]
+            t.eq(bs.peer, "MARS")
+            t.eq(bs.up, true)
+            t.ok(bs.trips >= 2, "trips")
+            t.ok(bs.sent >= 3, "sent")
+            t.eq(bs.fault, nil)
+            local nb = earth:status().neighbors[1]
+            t.eq(nb.kind, "bridge")
+            t.eq(nb.realm, "MARS")
+        end, 20000)
+    end)
+    w.clear()
+    if not ok then error(perr, 0) end
+end)
+
 t.finish()

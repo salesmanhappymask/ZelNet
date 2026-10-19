@@ -15,8 +15,9 @@ local M = {}
 M.DOWN_ROUTE_TTL = 600
 M.RATE_WINDOW = 10
 M.RATE_MAX = 100
-M.LINK_RATE_MAX = 400
+M.LINK_RATE_MAX = 600
 M.ERR_MAX = 30
+M.BAD_MAX = 20
 M.SUB_TTL = 600
 M.MAX_SUBS_PER_NODE = 64
 M.MAX_TOPICS = 500
@@ -24,11 +25,16 @@ M.PUB_MIN_GAP = 0.9
 M.UPDATE_CHUNK = 6000
 M.UPDATE_REBOOT_DELAY = 600
 M.MAX_WARNINGS = 20
+M.MAX_INBOX_PORTS = 64
+M.FLUSH_INTERVAL = 30
+M.FULL_FLUSH_INTERVAL = 300
 M.PROGRAM_PATH = "/zelnet"
 M.UPDATE_PATH = "/zelnet.new"
 
 local Server = {}
 Server.__index = Server
+
+local SERVER_ONLY_PORTS = { ["zn.ps"] = true, ["zn.err"] = true }
 
 function M.updateAad(ver, size, sha)
     return "zn.update|" .. tostring(ver) .. "|" .. tostring(size) .. "|" .. tostring(sha)
@@ -50,6 +56,7 @@ function M.new(ctx)
     self.rate = {}
     self.linkRate = {}
     self.errRate = {}
+    self.badRate = {}
     self.topics = {}
     self.pubTimes = {}
     self.localNames = {}
@@ -131,7 +138,8 @@ function Server:start()
     n:after(0.2, function() self:sendBeacon() end, "beacon-first")
     n:every(tonumber(self.cfg.beaconInterval) or 10, function() self:sendBeacon() end, "beacon")
     n:every(5, function() self:housekeeping() end, "server-housekeeping")
-    n:every(30, function() self:flushState() end, "server-flush")
+    n:every(M.FLUSH_INTERVAL, function() self:flushState(false) end, "server-flush")
+    n:every(M.FULL_FLUSH_INTERVAL, function() self:flushState(true) end, "server-flush-full")
     n:on("realm_up", function(r) self:onRealmUp(r) end)
     self.log.info("server " .. self.realm .. " (" .. self.cfg.role .. ") started as computer " .. tostring(self.myId))
     return true
@@ -182,6 +190,20 @@ function Server:windowAllow(tbl, key, max, label)
     return true
 end
 
+function M.originKey(linkId, dist)
+    local d = tonumber(dist)
+    return tostring(linkId) .. "@" .. (d and util.fmtFixed(d, 1) or "?")
+end
+
+function Server:isBlocked(origin)
+    local r = self.badRate[origin]
+    return r ~= nil and compat.now() - r.start < M.RATE_WINDOW and r.count >= M.BAD_MAX
+end
+
+function Server:noteBad(origin)
+    self:windowAllow(self.badRate, origin, M.BAD_MAX, "bad packets from the sender at " .. origin)
+end
+
 function Server:deviceFromSrc(src)
     local a = util.parseAddress(src)
     if not a or a.realm ~= self.realm or not a.id then return nil end
@@ -195,7 +217,12 @@ function Server:onAccessFrame(f, linkId, dist)
         return
     end
     if w.dir ~= "u" or f.t ~= self.myId or w.ttl <= 0 then return end
-    if not self:windowAllow(self.linkRate, f.f, M.LINK_RATE_MAX, "computer " .. tostring(f.f)) then return end
+    local origin = M.originKey(linkId, dist)
+    if self:isBlocked(origin) then
+        self:count("blocked")
+        return
+    end
+    if not self:windowAllow(self.linkRate, origin, M.LINK_RATE_MAX, "sender at " .. origin) then return end
     local dev = self.reg:get(w.dev)
     if not dev then
         self:count("unknownDevice")
@@ -209,6 +236,7 @@ function Server:onAccessFrame(f, linkId, dist)
     end
     local pkt = seal.openAccess(dev.key, w)
     if not pkt then
+        self:noteBad(origin)
         self:count("accessBad")
         self.node:count("badMac")
         return
@@ -292,11 +320,28 @@ function Server:routePacket(pkt, origin, dev)
         self:errorFor(pkt, "unknown_node", "no node " .. pkt.dst)
         return
     end
+    if SERVER_ONLY_PORTS[pkt.port] and not self:isServerAddress(pkt.src) then
+        self:count("dropped")
+        return
+    end
     self:sendDown(target, pkt)
+end
+
+function Server:inboxFull(pkt)
+    local n = self.node
+    if n.ports[pkt.port] or n.inboxes[pkt.port] then return false end
+    if pkt.port == "zn.ping" or pkt.port == "zn.err" then return false end
+    if pkt.re and n.pending[pkt.re] then return false end
+    return util.count(n.inboxes) >= M.MAX_INBOX_PORTS
 end
 
 function Server:deliverLocal(pkt, origin)
     if pkt.port == "zn.ps" and type(pkt.body) == "table" and pkt.body.op == "msg" and origin ~= "local" then return end
+    if origin ~= "local" and self:inboxFull(pkt) then
+        self:count("dropped")
+        self:noteOnce("inboxes", "too many unanswered ports, dropping packets for port " .. util.sanitize(pkt.port))
+        return
+    end
     self.node:deliver(pkt)
 end
 
@@ -446,6 +491,18 @@ function Server:subscribe(addr, pattern, ttl)
     return true
 end
 
+function Server:dropSubscriber(addr)
+    local n = 0
+    for key, e in pairs(self.topics) do
+        if e.subs[addr] then
+            e.subs[addr] = nil
+            n = n + 1
+        end
+        if not e.retained and next(e.subs) == nil then self.topics[key] = nil end
+    end
+    return n
+end
+
 function Server:unsubscribe(addr, pattern)
     local e = self.topics[pattern]
     if not e then return true end
@@ -555,6 +612,27 @@ function Server:onAdminMsg(msg)
         reply = { ok = false, err = "bad_request" }
     end
     if msg.rq then self.node:reply(msg, reply) end
+end
+
+function Server:adminQuery(realm, op, timeout)
+    local r = util.normRealm(realm)
+    if not r then return nil, "bad realm" end
+    op = op or "status"
+    if r == self.realm then
+        if op == "status" then
+            local st = self:status()
+            st.ok = true
+            return st
+        elseif op == "provision_log" then
+            return { ok = true, realm = self.realm, devices = self:devices() }
+        end
+        return nil, "bad_request"
+    end
+    local reply, err = self.node:request(r, "zn.admin", { op = op }, timeout or 40, { retries = 0 })
+    if not reply then return nil, err end
+    if type(reply) ~= "table" then return nil, "bad reply" end
+    if not reply.ok then return nil, reply.err or "refused" end
+    return reply
 end
 
 function Server:programPath()
@@ -696,7 +774,7 @@ function Server:housekeeping()
     for cid, r in pairs(self.down) do
         if now - r.t > M.DOWN_ROUTE_TTL then self.down[cid] = nil end
     end
-    for _, tbl in ipairs({ self.rate, self.linkRate, self.errRate }) do
+    for _, tbl in ipairs({ self.rate, self.linkRate, self.errRate, self.badRate }) do
         for k, r in pairs(tbl) do
             if now - r.start > M.RATE_WINDOW * 6 then tbl[k] = nil end
         end
@@ -717,8 +795,8 @@ function Server:housekeeping()
     if self.dir.waitStorage then self.dir:flush() end
 end
 
-function Server:flushState()
-    self.reg:flush()
+function Server:flushState(force)
+    self.reg:flush(force)
     self.dir:flush()
 end
 
@@ -765,6 +843,7 @@ function Server:provisionSatellite(name)
     if realm == self.realm then return nil, "realm exists" end
     local known = self.dir.realms[realm]
     if known and known.serverId then return nil, "realm exists" end
+    if not known and util.count(self.dir.realms) >= directory.MAX_REALMS then return nil, "too many realms" end
     local cfg = self.cfg
     local scfg = config.newServer({
         role = "satellite", network = cfg.network, realm = realm, mainRealm = self.mainRealm, backboneKey = cfg.backboneKey,
@@ -795,10 +874,16 @@ function Server:provision(role, name)
     return dcfg
 end
 
+function Server:forgetComputer(cid)
+    if not cid then return end
+    self.down[cid] = nil
+    self:dropSubscriber(self.realm .. ":" .. cid)
+end
+
 function Server:revoke(name)
     local rec = self.reg:get(name)
     if not rec then return nil, "unknown device" end
-    if rec.cid then self.down[rec.cid] = nil end
+    self:forgetComputer(rec.cid)
     local ok, err = self.reg:revoke(name)
     if ok then self.log.warn("device revoked: " .. name) end
     return ok, err
@@ -807,14 +892,14 @@ end
 function Server:resetBinding(name)
     local rec = self.reg:get(name)
     if not rec then return nil, "unknown device" end
-    if rec.cid then self.down[rec.cid] = nil end
+    self:forgetComputer(rec.cid)
     return self.reg:resetBinding(name)
 end
 
 function Server:removeDevice(name)
     local rec = self.reg:get(name)
     if not rec then return nil, "unknown device" end
-    if rec.cid then self.down[rec.cid] = nil end
+    self:forgetComputer(rec.cid)
     return self.reg:remove(name)
 end
 

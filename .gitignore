@@ -1,3 +1,4 @@
 sim/rom/
 *.tmp
 /build/
+luac.out

@@ -19,6 +19,9 @@ M.RETRY_INTERVAL = 10
 M.NONCE_TTL = 1800
 M.MAX_REALMS = 64
 M.MAX_BATCH = 500
+M.BRIDGE_HELLO_BACKLOG = 20
+M.BAD_MAX = 20
+M.BAD_WINDOW = 10
 
 local Backbone = {}
 Backbone.__index = Backbone
@@ -46,6 +49,7 @@ function M.new(ctx, srv)
     self.nonces = util.newSeenSet(M.NONCE_TTL, 20000)
     self.floodSeen = util.newSeenSet(M.NONCE_TTL, 20000)
     self.fwdSeen = util.newSeenSet(300, 6000)
+    self.bad = {}
     self.helloSeq = 0
     self.advSeq = 0
     self.bridgeSet = {}
@@ -82,6 +86,31 @@ function Backbone:count(key, n)
     self.counters[key] = (self.counters[key] or 0) + (n or 1)
 end
 
+function Backbone:originOf(linkId, dist)
+    if isBridgeLink(linkId) then return nil end
+    local d = tonumber(dist)
+    return tostring(linkId) .. "@" .. (d and util.fmtFixed(d, 1) or "?")
+end
+
+function Backbone:isBlocked(origin)
+    if not origin then return false end
+    local r = self.bad[origin]
+    return r ~= nil and compat.now() - r.start < M.BAD_WINDOW and r.count >= M.BAD_MAX
+end
+
+function Backbone:noteBad(origin)
+    self:count("badMac")
+    if not origin then return end
+    local now = compat.now()
+    local r = self.bad[origin]
+    if not r or now - r.start >= M.BAD_WINDOW then
+        r = { start = now, count = 0 }
+        self.bad[origin] = r
+    end
+    r.count = r.count + 1
+    if r.count == M.BAD_MAX then self.log.warn("backbone: bad packets from the sender at " .. origin) end
+end
+
 function Backbone:checkCipher()
     local c = self.cipher
     if not c then
@@ -114,8 +143,8 @@ end
 function Backbone:start()
     local n = self.node
     self:checkCipher()
-    n:onFrame("h", function(_, f, linkId) self:onHello(f, linkId) end)
-    n:onFrame("x", function(_, f, linkId) self:onFrame(f, linkId) end)
+    n:onFrame("h", function(_, f, linkId, dist) self:onHello(f, linkId, dist) end)
+    n:onFrame("x", function(_, f, linkId, dist) self:onFrame(f, linkId, dist) end)
     n:after(0.5, function() self:sendHellos() end, "bb-hello-first")
     n:every(self:helloInterval(), function() self:sendHellos() end, "bb-hello")
     n:every(self:routeInterval(), function() self:advertise() end, "bb-advert")
@@ -151,17 +180,23 @@ function Backbone:sendHellos()
     self.node.links:broadcast(frame.make(self.cfg.netId, "h", self.myId, nil, d))
 end
 
+function Backbone:bridgeBacklog(entry)
+    local ok, st = pcall(entry.obj.status, entry.obj)
+    if ok and type(st) == "table" then return tonumber(st.queued) or 0 end
+    return 0
+end
+
 function Backbone:sendBridgeHellos()
     if not self.enabled then return end
     for _, entry in pairs(self.bridgeSet) do
-        if not entry.removed then
+        if not entry.removed and self:bridgeBacklog(entry) < M.BRIDGE_HELLO_BACKLOG then
             local ok, err = pcall(entry.obj.enqueue, entry.obj, { hello = self:helloData() })
             if not ok then self.log.debug("bridge hello: " .. tostring(err)) end
         end
     end
 end
 
-function Backbone:onHello(f, linkId)
+function Backbone:onHello(f, linkId, dist)
     if not self.enabled then return end
     local d = f.d
     if not frame.validHello(d) then return end
@@ -171,8 +206,10 @@ function Backbone:onHello(f, linkId)
         return
     end
     if not util.normRealm(d.realm) or util.normRealm(d.realm) ~= d.realm then return end
+    local origin = self:originOf(linkId, dist)
+    if self:isBlocked(origin) then return end
     if not crypto.constEq(seal.helloMac(self.key, d), d.mac) then
-        self:count("badMac")
+        self:noteBad(origin)
         return
     end
     if not viaBridge and d.id ~= f.f then return end
@@ -234,10 +271,15 @@ function Backbone:neighborKey(f, linkId)
     return self.radioById[f.f]
 end
 
-function Backbone:onFrame(f, linkId)
+function Backbone:onFrame(f, linkId, dist)
     if not self.enabled then return end
     local w = f.d
     if not frame.validBackbone(w) or w.v ~= version.protocol then
+        self:count("dropped")
+        return
+    end
+    local origin = self:originOf(linkId, dist)
+    if self:isBlocked(origin) then
         self:count("dropped")
         return
     end
@@ -246,7 +288,7 @@ function Backbone:onFrame(f, linkId)
     local nb = fromKey and self.neighbors[fromKey]
     if nb and nb.kind == "bridge" then nb.lastSeen = compat.now() end
     if w.dst == "*" then
-        self:onFlood(w, fromKey)
+        self:onFlood(origin, w, fromKey)
         return
     end
     local a = util.parseAddress(w.dst)
@@ -257,7 +299,7 @@ function Backbone:onFrame(f, linkId)
     if a.realm == self.realm then
         local pkt, nonce = seal.openBackbone(self.cipher, self.key, w)
         if not pkt then
-            self:count("badMac")
+            self:noteBad(origin)
             return
         end
         if self.nonces.check(nonce) then
@@ -277,7 +319,7 @@ function Backbone:onFrame(f, linkId)
         return
     end
     if not seal.verifyBackbone(self.key, w) then
-        self:count("badMac")
+        self:noteBad(origin)
         return
     end
     self.fwdSeen.check(w.id)
@@ -290,11 +332,11 @@ function Backbone:onFrame(f, linkId)
     self:forward(w, fromKey)
 end
 
-function Backbone:onFlood(w, fromKey)
+function Backbone:onFlood(origin, w, fromKey)
     if self.floodSeen.has(w.id) then return end
     local pkt, nonce = seal.openBackbone(self.cipher, self.key, w)
     if not pkt then
-        self:count("badMac")
+        self:noteBad(origin)
         return
     end
     self.floodSeen.check(w.id)
@@ -578,6 +620,9 @@ function Backbone:maintain()
     if changed then self:recompute() end
     for r, rt in pairs(self.routes) do
         if rt.metric >= M.INF and now - (rt.dead or now) > route * 2 then self.routes[r] = nil end
+    end
+    for cid, r in pairs(self.bad) do
+        if now - r.start > M.BAD_WINDOW * 6 then self.bad[cid] = nil end
     end
 end
 

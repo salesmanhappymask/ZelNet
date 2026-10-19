@@ -129,4 +129,43 @@ t.case("user names follow the TekMail rules", function()
     t.eq(directory.normUser(nil), nil)
 end)
 
+t.case("claims and renames stop when the directory would not fit in one backbone packet", function()
+    local srv = mainServer()
+    local dir = srv.dir
+    local budget = directory.BODY_BUDGET
+    directory.BODY_BUDGET = 1500
+    local ok, perr = pcall(function()
+        local last, i = nil, 0
+        repeat
+            i = i + 1
+            last = dir:apply("MARS", { op = "claim", user = "user" .. i, realm = "MARS" })
+        until not last.ok or i > 200
+        t.eq(last.err, "full")
+        t.eq(dir:userHome("user" .. i), nil, "refused claim kept")
+        t.ok(#need("codec").encode(dir:snapshot()) <= 1500)
+        local r = dir:apply("MARS", { op = "rename", old = "user1", new = "averyverylongnam" })
+        t.eq(r.err, "full")
+        t.eq(dir:userHome("user1"), "MARS", "old name lost on a refused rename")
+        t.eq(dir:userHome("averyverylongnam"), nil)
+        t.eq(dir:apply("MARS", { op = "rename", old = "user1", new = "user0" }).ok, true, "same size rename refused")
+    end)
+    directory.BODY_BUDGET = budget
+    if not ok then error(perr, 0) end
+end)
+
+t.case("register refuses new realms past the realm limit", function()
+    local srv = mainServer()
+    local dir = srv.dir
+    local max = directory.MAX_REALMS
+    directory.MAX_REALMS = 2
+    local ok, perr = pcall(function()
+        t.eq(dir:apply("MARS", { op = "register", realm = "MARS", serverId = 2 }).ok, true)
+        t.eq(dir:apply("VENUS", { op = "register", realm = "VENUS", serverId = 3 }).err, "full")
+        t.eq(dir:apply("MARS", { op = "register", realm = "MARS", serverId = 2 }).ok, true, "known realm refused")
+        t.eq(select(2, srv:provision("satellite", "pluto")), "too many realms")
+    end)
+    directory.MAX_REALMS = max
+    if not ok then error(perr, 0) end
+end)
+
 t.finish()

@@ -20,7 +20,7 @@ end
 
 function M.fakeStorage()
     local data = {}
-    local st = { data = data, isReady = true, writes = 0 }
+    local st = { data = data, isReady = true, writes = 0, counts = {} }
     function st:ready() return self.isReady end
     function st:read(role, rel, default)
         local v = data[role .. "/" .. rel]
@@ -30,11 +30,22 @@ function M.fakeStorage()
     function st:write(role, rel, value)
         if not self.isReady then return nil, "storage offline" end
         self.writes = self.writes + 1
-        data[role .. "/" .. rel] = M.util.deepCopy(value)
+        local key = role .. "/" .. rel
+        self.counts[key] = (self.counts[key] or 0) + 1
+        data[key] = M.util.deepCopy(value)
         return true
     end
     function st:audit() end
     return st
+end
+
+function M.carry(peer, ch, rch, f)
+    local copy = M.util.deepCopy(f)
+    local got, linkId, dist = peer.node.links:decode("modem_message", peer.side, ch, rch, copy, peer.dist or 5)
+    if got then
+        peer.node.inq.push({ f = got, link = linkId, dist = dist })
+        peer.node:wake()
+    end
 end
 
 local function modemDef(port)
@@ -50,12 +61,7 @@ local function modemDef(port)
                 port.tx[#port.tx + 1] = M.util.deepCopy(f)
                 if port.cut then return end
                 for _, peer in ipairs(port.peers) do
-                    local copy = M.util.deepCopy(f)
-                    local got, linkId, dist = peer.node.links:decode("modem_message", peer.side, ch, rch, copy, peer.dist or 5)
-                    if got then
-                        peer.node.inq.push({ f = got, link = linkId, dist = dist })
-                        peer.node:wake()
-                    end
+                    if not peer.cut then M.carry(peer, ch, rch, f) end
                 end
             end,
         },
@@ -77,6 +83,15 @@ function M.connect(nodeA, sideA, nodeB, sideB)
     pa.peers[#pa.peers + 1] = { node = nodeB, side = sideB }
     pb.peers[#pb.peers + 1] = { node = nodeA, side = sideA }
     return pa, pb
+end
+
+function M.cutPair(sideA, sideB, cut)
+    for _, peer in ipairs(M.port(sideA).peers) do
+        if peer.side == sideB then peer.cut = cut end
+    end
+    for _, peer in ipairs(M.port(sideB).peers) do
+        if peer.side == sideA then peer.cut = cut end
+    end
 end
 
 function M.attach(n, sides)
