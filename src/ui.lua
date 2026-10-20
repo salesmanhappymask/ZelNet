@@ -310,9 +310,12 @@ function Page:list(x, y, w, h, rows, offset, selected, actionPrefix)
                 fg = self.c.text
             end
             if selected and not self.s.isColor then text = ((selected == i) and ">" or " ") .. tostring(text or "") end
-            self.s:field(x, y + r - 1, w, text, fg, bg)
-            if type(row) == "table" and row.right then
-                local rt = util.fitText(row.right, math.max(0, w - 2))
+            local rt = type(row) == "table" and row.right and util.fitText(util.sanitize(row.right), math.max(0, w - 2)) or nil
+            local leftW = w
+            if rt and #rt > 0 then leftW = math.max(1, w - #rt - 1) end
+            self.s:field(x, y + r - 1, w, "", fg, bg)
+            self.s:field(x, y + r - 1, leftW, text, fg, bg)
+            if rt and #rt > 0 then
                 self.s:text(x + w - #rt, y + r - 1, rt, row.rightColor or self.c.muted, bg)
             end
             if actionPrefix then self:hotspot(x, y + r - 1, w, 1, actionPrefix .. i) end
@@ -369,8 +372,11 @@ function M.form(surf, opts)
         local ix, iy, iw, ih = page:container(opts.title, opts.subtitle)
         local y = iy
         if opts.intro then
-            local n = page:wrapped(ix, y, iw, 4, opts.intro, page.c.muted)
-            y = y + n + 1
+            local room = math.min(4, ih - 4 - 2 * (#fields - 1))
+            if room > 0 then
+                local n = page:wrapped(ix, y, iw, room, opts.intro, page.c.muted)
+                y = y + n + 1
+            end
         end
         local labelW = 0
         for _, f in ipairs(fields) do labelW = math.max(labelW, #f.label) end

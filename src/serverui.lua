@@ -1380,13 +1380,21 @@ function Console:networkRows(kind, srv)
     elseif kind == "links" then
         for _, l in ipairs(st.links or {}) do
             rows[#rows + 1] = {
-                text = tostring(l.id) .. (l.wireless and " wireless" or ""),
-                right = "tx " .. tostring(l.tx or 0) .. " rx " .. tostring(l.rx or 0),
+                text = M.linkTitle(l),
+                right = l.complete == false and "INCOMPLETE" or ("tx " .. tostring(l.tx or 0) .. " rx " .. tostring(l.rx or 0)),
                 color = l.open == false and c.bad or c.text,
             }
         end
     end
     return rows
+end
+
+function M.linkTitle(l)
+    if l.kind == "bitnet" then
+        local what = l.sub == "antenna" and "BitNet antenna " or "BitNet tower "
+        return what .. tostring(l.name or l.id)
+    end
+    return tostring(l.id) .. (l.wireless and " wireless" or "")
 end
 
 function Console:pingFlow()
@@ -1973,10 +1981,10 @@ function Console:settings()
 end
 
 M.DISPLAY_ROLES = {
-    { key = "activity", label = "Activity:", hint = "6x3 monitor: live traffic" },
-    { key = "console", label = "Console:", hint = "6x3 monitor: console tabs" },
-    { key = "setup", label = "Setup:", hint = "1x2 monitor: device setup" },
-    { key = "drive", label = "Setup drive:", hint = "drive under the setup monitor" },
+    { key = "activity", label = "Activity monitor:", hint = "6x3, live traffic" },
+    { key = "console", label = "Console monitor:", hint = "6x3, console tabs" },
+    { key = "setup", label = "Setup monitor:", hint = "1x2, device setup" },
+    { key = "drive", label = "Setup drive:", hint = "the drive's own name, drive_N" },
 }
 
 function M.displayHint(cfg)
@@ -2005,7 +2013,7 @@ function M.displayForm(surf, cfg)
     while true do
         local r = ui.form(surf, {
             title = "Displays", error = errMsg, submit = "Save",
-            intro = "Each monitor shows its name now. Type 12 or monitor_12 (drive_7 for the drive). Empty skips.",
+            intro = "Monitors show their names now. Type 12 or monitor_12; the drive is drive_N.",
             fields = fields,
         })
         if not r then break end

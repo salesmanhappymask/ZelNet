@@ -17,6 +17,7 @@ M.MAX_HANDLERS = 24
 M.INBOX_MAX = 64
 M.OUTQ_MAX = 64
 M.TRACE_MAX = 150
+M.TOWER_RECHECK = 30
 
 function M.new(cfg, opts)
     opts = opts or {}
@@ -797,6 +798,12 @@ function Node:start()
         self.log.warn("no modem or BitNet link found")
     end
     if not self.isServer then self:deviceTimers() end
+    self:every(M.TOWER_RECHECK, function()
+        if self.links:hasIncomplete() then
+            self.links:scan()
+            if not self.links:hasIncomplete() then self.log.info("BitNet tower is complete now") end
+        end
+    end, "tower-recheck")
     self.startedLinks = true
     return true
 end

@@ -88,6 +88,12 @@ function LinkSet:scan()
                         link.complete = true
                     end
                     link.open = link.complete
+                    if not link.complete and not link.warned then
+                        link.warned = true
+                        logf(self, "warn", "BitNet tower " .. n .. " is attached but incomplete; finish building it")
+                    elseif link.complete then
+                        link.warned = nil
+                    end
                 end
             end
         end
@@ -104,6 +110,13 @@ function LinkSet:scan()
     end
     self.order = keep
     return self:list()
+end
+
+function LinkSet:hasIncomplete()
+    for _, l in pairs(self.links) do
+        if l.kind == "bitnet" and l.complete == false then return true end
+    end
+    return false
 end
 
 function LinkSet:list()

@@ -829,7 +829,7 @@ function Server:status()
     for k, v in pairs(self.bb.counters) do counters["bb_" .. k] = v end
     local linksList = {}
     for _, l in ipairs(self.node.links:list()) do
-        linksList[#linksList + 1] = { id = l.id, kind = l.kind, wireless = l.wireless, open = l.open, tx = l.tx, rx = l.rx }
+        linksList[#linksList + 1] = { id = l.id, kind = l.kind, sub = l.sub, name = l.name, complete = l.complete, wireless = l.wireless, open = l.open, tx = l.tx, rx = l.rx }
     end
     return {
         realm = self.realm, role = self.cfg.role, isMain = self.isMain, serverId = self.myId,
