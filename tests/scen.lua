@@ -90,7 +90,44 @@ function M.device(w, opts, disk)
     drive:insert(disk)
     c:boot()
     w:run(opts.wait or 40)
+    drive:remove()
     return c
+end
+
+function M.twoRealms(w, crypto, extraEarth, extraMars)
+    local backbone = crypto.newKey()
+    local eSend = w:tesseract({ frequency = 1 })
+    local eRecv = w:tesseract({ frequency = 2 })
+    local mSend = w:tesseract({ frequency = 2 })
+    local mRecv = w:tesseract({ frequency = 1 })
+    local eSendDrive, eRecvDrive, mSendDrive, mRecvDrive = w:diskDrive(), w:diskDrive(), w:diskDrive(), w:diskDrive()
+    eSend:adjacent("north", eSendDrive)
+    eRecv:adjacent("north", eRecvDrive)
+    mSend:adjacent("north", mSendDrive)
+    mRecv:adjacent("north", mRecvDrive)
+    eSendDrive:insert(w:floppy({ label = "earth-mars" }))
+    mSendDrive:insert(w:floppy({ label = "mars-earth" }))
+    for _, set in ipairs({ { "earth", eSend, eRecv, eSendDrive, eRecvDrive }, { "mars", mSend, mRecv, mSendDrive, mRecvDrive } }) do
+        w:connect(set[1], set[2], "tesseract_0")
+        w:connect(set[1], set[3], "tesseract_1")
+        w:connect(set[1], set[4], "drive_0")
+        w:connect(set[1], set[5], "drive_1")
+    end
+    local function bridgeTo(peer)
+        return { { peer = peer, sendTess = "tesseract_0", sendDrive = "drive_0", sendDir = "north", recvTess = "tesseract_1", recvDrive = "drive_1", recvDir = "north" } }
+    end
+    local ex1 = extraEarth or {}
+    ex1.bridges = bridgeTo("MARS")
+    local ex2 = extraMars or {}
+    ex2.bridges = bridgeTo("EARTH")
+    local earth = M.server(w, { id = 1, realm = "EARTH", dim = "overworld", pos = { 0, 70, 0 }, cable = "earth",
+        cfg = M.serverCfg("EARTH", "main", "EARTH", backbone, ex1) })
+    local mars = M.server(w, { id = 2, realm = "MARS", dim = "mars", pos = { 0, 70, 0 }, cable = "mars",
+        cfg = M.serverCfg("MARS", "satellite", "EARTH", backbone, ex2) })
+    w:run(10)
+    M.unlock(w, earth)
+    M.unlock(w, mars)
+    return earth, mars
 end
 
 return M
