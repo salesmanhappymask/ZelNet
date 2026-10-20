@@ -42,6 +42,9 @@ end
 local WRITE = [[
 local function put(name, s) local h = fs.open(name, "w") h.write(s) h.close() end
 ]]
+local SETTLE = [[
+local __st = os.startTimer(0) repeat local _, __i = os.pullEvent("timer") until __i == __st
+]]
 
 test("waitForAny with filtered pullEvent coroutines while modem messages arrive", function()
     local w = newWorld()
@@ -112,9 +115,9 @@ end)
 
 test("os.queueEvent ordering and timer interleaving", function()
     local w = newWorld()
-    local c = w:addComputer{ id = 5, startup = WRITE .. [[
+    local c = w:addComputer{ id = 5, startup = SETTLE .. WRITE .. [[
 local t = os.startTimer(0)
-os.queueEvent("a", 1)
+os.queueEvent("a", 11)
 os.queueEvent("b", 2)
 os.queueEvent("c", 3)
 local out = {}
@@ -129,7 +132,7 @@ for i = 2, 5 do if ids[i] == ids[i - 1] then distinct = false end end
 put("q", table.concat(out, ",") .. "|" .. tostring(distinct))
 ]] }
     c:boot()
-    eq(waitFile(w, c, "q", 3), "a1,b2,c3,timerT|true")
+    eq(waitFile(w, c, "q", 3), "a11,b2,c3,timerT|true")
 end)
 
 test("textutils serialize round trip through modem and deep copies", function()
@@ -174,7 +177,7 @@ end)
 
 test("queueEvent deep copies tables and drops functions", function()
     local w = newWorld()
-    local c = w:addComputer{ id = 8, startup = WRITE .. [[
+    local c = w:addComputer{ id = 8, startup = SETTLE .. WRITE .. [[
 local t = { k = { 1, 2 }, f = function() end, [true] = "b" }
 os.queueEvent("x", t, function() end, nil, 5)
 t.k[1] = 99
@@ -520,7 +523,7 @@ end)
 
 test("cpu heavy loops: yielding survives, busy loop killed, shell survives", function()
     local w = newWorld()
-    local c = w:addComputer{ id = 29, budget = 3e6, startup = WRITE .. [[
+    local c = w:addComputer{ id = 29, budget = 3e6, startup = SETTLE .. WRITE .. [[
 local acc = 0
 for round = 1, 200 do
   for i = 1, 5000 do acc = acc + i % 7 end
@@ -618,7 +621,7 @@ end)
 test("op call through wired modem waits a tick, parallel siblings keep events", function()
     local w = newWorld()
     local t = w:tesseract{ frequency = 42 }
-    local c = w:addComputer{ id = 35, startup = WRITE .. [[
+    local c = w:addComputer{ id = 35, startup = SETTLE .. WRITE .. [[
 local names = {}
 local freq
 parallel.waitForAll(

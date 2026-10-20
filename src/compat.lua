@@ -127,14 +127,32 @@ function M.setBreathEvery(n)
     breathEvery = math.max(1, n)
 end
 
+local settled = false
+
 function M.yieldNow()
     if not M.isCC() or not coroutine.running() then return end
+    local timer = not settled and type(os.startTimer) == "function" and os.startTimer(0) or nil
     os.queueEvent("zn_breathe")
     while true do
-        local ev = os.pullEventRaw()
-        if ev == "zn_breathe" then return end
+        local ev, a = os.pullEventRaw()
+        if ev == "zn_breathe" then
+            settled = true
+            return
+        end
+        if timer and ev == "timer" and a == timer then return end
         if ev == "terminate" then error("Terminated", 0) end
     end
+end
+
+function M.settle()
+    if settled or not M.isCC() or not coroutine.running() or type(os.startTimer) ~= "function" then return end
+    local timer = os.startTimer(0)
+    while true do
+        local ev, a = os.pullEventRaw()
+        if ev == "timer" and a == timer then break end
+        if ev == "terminate" then error("Terminated", 0) end
+    end
+    settled = true
 end
 
 function M.breathe(weight)

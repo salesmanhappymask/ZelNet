@@ -131,12 +131,20 @@ for c = 36, 126 do
 if c ~= 96 then V[c] = k k = k + 1 end
 end
 end
+local settled = false
 local function breathe()
 if os and os.queueEvent and coroutine.running() then
+if settled then
 os.queueEvent("zn_unpack")
 os.pullEvent("zn_unpack")
+else
+local t = os.startTimer(0)
+repeat local _, id = os.pullEvent("timer") until id == t
+settled = true
 end
 end
+end
+breathe()
 local function U(s)
 local out, n = {}, 0
 local pos, len = 1, #s
@@ -673,9 +681,16 @@ local ok, v = pcall(textutils.unserialize, s)
 if ok and type(v) == "table" then return v end
 return nil
 end
+local settled = false
 local function breathe()
+if settled then
 os.queueEvent("zn_install")
 os.pullEvent("zn_install")
+else
+local t = os.startTimer(0)
+repeat local _, id = os.pullEvent("timer") until id == t
+settled = true
+end
 end
 local function color(c)
 if term.isColor and term.isColor() then term.setTextColor(c) end
@@ -795,6 +810,7 @@ say("Ask the server admin for a new disk.")
 return false
 end
 local function main()
+breathe()
 if term.clear then term.clear() term.setCursorPos(1, 1) end
 say("ZelNet installer", colors.cyan)
 local existing = parse(readAll("/.zelnet/config"))

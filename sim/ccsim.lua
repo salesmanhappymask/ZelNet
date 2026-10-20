@@ -556,6 +556,10 @@ function Computer:makeOs()
     local os = {}
     os.queueEvent = native(function(name, ...)
         if type(name) ~= "string" then fail("Expected string") end
+        if c.booting and c.world.config.dropBootEvents ~= false then
+            c.bootDropped = (c.bootDropped or 0) + 1
+            return
+        end
         c:queueLuaEvent(name, ...)
     end)
     os.startTimer = native(function(t)
@@ -947,7 +951,9 @@ function Computer:boot()
         end
     end
     w:log("computer " .. self.id .. " booted")
+    self.booting = true
     self:resume(pack())
+    self.booting = false
     return true
 end
 

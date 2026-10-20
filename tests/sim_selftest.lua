@@ -682,6 +682,7 @@ local f = fs.open("co", "w") f.write(tostring(ok) .. ":" .. tostring(e)) f.close
     w:run(1)
     eq(c2:readFile("co"), "false:Too long without yielding")
     local c3 = w:addComputer{ id = 112, budget = 2e6, startup = [[
+local __st = os.startTimer(0) repeat local _, __i = os.pullEvent("timer") until __i == __st
 local n = 0
 for i = 1, 60 do
   for j = 1, 20000 do n = n + j end
@@ -693,9 +694,30 @@ local f = fs.open("ok", "w") f.write("done") f.close()
     check(waitFile(w, c3, "ok", 5), "yielding program was aborted: " .. tostring(c3:lastError()))
 end)
 
+test("os.queueEvent before the first yield at boot is dropped", function()
+    local w = newWorld()
+    local c = w:addComputer{ id = 121, startup = [[
+os.queueEvent("early")
+local t = os.startTimer(0.2)
+local got = {}
+while true do
+  local ev, a = os.pullEvent()
+  if ev == "timer" and a == t then break end
+  got[#got + 1] = ev
+end
+os.queueEvent("late")
+local ev = os.pullEvent("late")
+local f = fs.open("q", "w") f.write(table.concat(got, ",") .. "|" .. ev) f.close()
+]] }
+    c:boot()
+    check(waitFile(w, c, "q", 3), "no result")
+    eq(c:readFile("q"), "|late")
+end)
+
 test("event queue overflow drops beyond 256", function()
     local w = newWorld()
     local c = w:addComputer{ id = 120, startup = [[
+local __st = os.startTimer(0) repeat local _, __i = os.pullEvent("timer") until __i == __st
 for i = 1, 300 do os.queueEvent("e", i) end
 local timer = os.startTimer(0.2)
 local n, last = 0, 0

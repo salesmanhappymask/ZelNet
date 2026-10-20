@@ -71,6 +71,7 @@ function M.start(args, env)
         return api
     end
     if mode == "library" then return api end
+    compat.settle()
     local prov = tryNeed("provision")
     if prov and path and M.fileIsBundle(path) then prov.setProgramPath(path) end
     M.programPath = path

@@ -5,6 +5,7 @@ Sources: the extracted jars under the session scratchpad (`jars/`), read with `j
 ## ComputerCraft 1.63 (tomo1 build)
 - Every computer runs the real `bios.lua` with the real ROM mounted read only at `/rom`.
 - Event queue capacity is 256 per computer (`ComputerThread` uses `LinkedBlockingQueue(256)`). Extra events are dropped silently.
+- `os.queueEvent` called before a program first yields after boot is dropped. Seen in game: a packed program that queued its own wake-up event at boot waited forever, yet ran fine when started from the shell. A timer started at that point still fires, so the first yield should wait on `os.startTimer(0)`.
 - `os.reboot()` and a start request take effect only once more than 50 ticks have passed since the previous start (`Computer.advance` checks `m_ticksSinceStart > 50`). The harness `computer:reboot()` and `computer:boot()` skip this delay.
 - Timers count down `0.05` per tick in doubles (`OSAPI.advance`), so `os.startTimer(0.5)` fires on the 11th tick and `sleep(5)` takes 101 ticks. The sim does the same.
 - World time is shared by all dimensions (1.6.4 dimensions use the overworld's world info), so `os.time()` and `os.day()` are the same everywhere.
