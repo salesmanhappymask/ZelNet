@@ -59,6 +59,24 @@ A complete BitNet tower attached to a server or router extends that node's range
 
 On any server's console: **Devices**, **New device**, pick the role, a name and an empty floppy. Put the disk in the new computer and reboot. The device finds the network by itself and connects to the server that made its disk.
 
+## Getting the program into the game
+
+The ready-to-use program is `dist/zelnet` (about 480 KB). Pick whichever way works on your server:
+
+* **Copy the file directly** into the computer's folder in the world save: `saves/<world>/computer/<id>/zelnet` (single player) or `world/computer/<id>/zelnet` (server). Find the computer's id with the `id` command.
+* **Pastebin**: paste `dist/zelnet` into a new paste (it fits the 512 KB limit) and run `pastebin get <code> zelnet` in game. CC 1.63's default HTTP whitelist only allows pastebin.com.
+
+Only servers need the file this way. Every other computer gets ZelNet from a provisioning disk.
+
+## First in-game test
+
+1. Main server: place an advanced computer with a wireless modem on top, a Cipher Block next to it (any six item stacks), and a disk drive. Put `zelnet` on it and run `zelnet`. Follow the wizard (Main server, realm `EARTH`).
+2. Client: on the console open Devices, press `n`, pick Client, name it, pick the drive with a blank floppy, write it. Put the floppy in a drive next to a new computer with a wireless modem and reboot that computer. Take the floppy out when the installer finishes.
+3. On the client create an account and send yourself a message from a second client.
+4. Satellite: on the Main console create a Satellite server disk set (two floppies). Install it on a server in the other dimension with its own Cipher Block holding the same six items, then add the bridge on the Bridges page of both servers.
+
+Report anything odd with a screenshot of the screen; the console's Event log page and `/.zelnet/crash.txt` help too.
+
 ## Using ZelNet from your own programs
 
 ```lua

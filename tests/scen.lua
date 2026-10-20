@@ -9,7 +9,7 @@ local M = {}
 
 M.ITEMS = { { id = 35, dmg = 1, qty = 3 }, { id = 1, dmg = 0, qty = 7 }, { id = 4, qty = 2 }, false, false, false }
 
-local f = assert(io.open("build/zelnet", "rb"))
+local f = assert(io.open(os.getenv("ZN_PROGRAM") or "build/zelnet", "rb"))
 M.program = f:read("*a")
 f:close()
 

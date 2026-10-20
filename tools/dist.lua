@@ -1,0 +1,10 @@
+package.path = "./?.lua;" .. package.path
+require("tests.fakecc").install({})
+local need = require("tools.devload").make(".")
+local provision = need("provision")
+local f = assert(io.open("build/zelnet", "rb")) local text = f:read("*a") f:close()
+local out = provision.serverBuild(text)
+assert(loadstring(out, "=zelnet"))
+os.execute("mkdir -p dist")
+local o = assert(io.open("dist/zelnet", "wb")) o:write(out) o:close()
+print("dist/zelnet", #out .. " bytes")
