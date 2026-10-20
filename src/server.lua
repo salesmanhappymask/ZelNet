@@ -29,7 +29,6 @@ M.MAX_INBOX_PORTS = 64
 M.FLUSH_INTERVAL = 30
 M.FULL_FLUSH_INTERVAL = 300
 M.PROGRAM_PATH = "/zelnet"
-M.UPDATE_PATH = "/zelnet.new"
 
 local Server = {}
 Server.__index = Server
@@ -687,8 +686,6 @@ function Server:pushUpdate(text, ver)
     local fn, err = loadstring(text, "=zelnet")
     if not fn then return nil, "does not compile: " .. tostring(err) end
     local offer = self:prepareUpdate(text, ver)
-    local ok, werr = util.writeFile(M.UPDATE_PATH, text)
-    if not ok then return nil, "cannot store update: " .. tostring(werr) end
     self.updateOffer = offer
     self:broadcastRealms("zn.update", offer)
     self:offerDevices()
@@ -745,8 +742,15 @@ function Server:fetchUpdate(b)
 end
 
 function Server:installUpdate(text, ver)
-    local ok, err = util.writeFile(M.UPDATE_PATH, text)
-    if ok then ok, err = util.writeFile(self:programPath(), text) end
+    local path = self:programPath()
+    local tmp = path .. ".dl"
+    local ok, err = util.writeFile(tmp, text)
+    if ok then
+        if fs.exists(path) then fs.delete(path) end
+        fs.move(tmp, path)
+    else
+        pcall(fs.delete, tmp)
+    end
     if not ok then
         self:warn("cannot install update " .. ver .. ": " .. tostring(err))
         return false
@@ -775,7 +779,7 @@ function Server:onUpdateMsg(msg)
         self:warn("rejected an update offer with a bad signature")
         return
     end
-    if self.fetching or b.version == version.program or (self.update and self.update.sha == b.sha) then return end
+    if self.fetching or b.version == version.full() or (self.update and self.update.sha == b.sha) then return end
     self.log.info("downloading update " .. b.version)
     self:fetchUpdate(b)
 end

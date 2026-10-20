@@ -746,7 +746,7 @@ function Console:mainItems()
         { label = "Audit log", run = function() return self:auditPage() end },
         { label = "Event log", run = function() return self:eventLog() end },
         { label = "Settings", run = function() return self:settings() end },
-        { label = isMain and "Update network" or "Update status", run = function() return self:updatePage() end },
+        { label = isMain and "Update network" or "Update", run = function() return self:updatePage() end },
         { label = "Lock", run = function() return "lock" end },
         { label = "Exit to shell", run = function() return self:exitToShell() end },
         { label = "Reboot", run = function() return self:rebootFlow() end },
@@ -2031,22 +2031,91 @@ function Console:displaySettings()
 end
 
 function M.programVersion(text)
+    local okU, up = pcall(need, "updater")
+    if okU and up then return up.versionOf(text) end
     if type(text) ~= "string" then return nil end
-    return text:match("program%s*=%s*\"([%w%.%-_]+)\"")
+    return text:match("program%s*=%s*\"(%d[%w%.%-_]*)\"")
 end
 
 function Console:updatePage()
-    local srv = self.ctx.server
+    local isMain = self.cfg.role == "main"
+    local okU, up = pcall(need, "updater")
+    local items = {}
+    if okU and up then items[#items + 1] = { label = "Download from the repo", hint = "GitHub", value = "repo" } end
+    if isMain then
+        items[#items + 1] = { label = "Send a program file", hint = "from disk", value = "file" }
+    else
+        items[#items + 1] = { label = "Update status", value = "status" }
+    end
+    local choice = self:choose(isMain and "Update Network" or "Update", "This server runs ZelNet " .. version.full(), items)
+    if choice == "repo" then
+        return self:repoUpdate(up)
+    elseif choice == "file" then
+        return self:fileUpdate()
+    elseif choice == "status" then
+        return self:updateStatus()
+    end
+    return nil
+end
+
+function Console:updateStatus()
     local st = self:snapshot(true).status or {}
-    if self.cfg.role ~= "main" then
-        local lines = {
-            "This server runs ZelNet " .. version.program .. ".",
-            "Updates come from Main (" .. tostring(self.cfg.mainRealm) .. ") over the backbone; this server installs them and reboots by itself.",
-        }
-        if st.update then lines[#lines + 1] = "Last update seen: " .. tostring(st.update.version) .. ", " .. util.fmtBytes(st.update.size or 0) end
-        self:say("Update Status", lines)
+    local lines = {
+        "This server runs ZelNet " .. version.full() .. ".",
+        "Updates come from Main (" .. tostring(self.cfg.mainRealm) .. ") over the backbone; this server installs them and reboots by itself.",
+    }
+    if st.update then lines[#lines + 1] = "Last update seen: " .. tostring(st.update.version) .. ", " .. util.fmtBytes(st.update.size or 0) end
+    self:say("Update Status", lines)
+    return nil
+end
+
+function Console:repoUpdate(up)
+    local url = up.url(self.cfg)
+    local got, err = self:inTask("Download", "Downloading the newest ZelNet from " .. url, function() return up.fetch(self.cfg) end)
+    if type(got) ~= "table" then
+        self:audit("update_download", url, tostring(err), false)
+        return self:result("Download", false, err)
+    end
+    self:audit("update_download", got.version, nil, true)
+    local isMain = self.cfg.role == "main"
+    local intro = "The repo has ZelNet " .. got.version .. " (" .. util.fmtBytes(got.size) .. "). This server runs " .. got.current .. "."
+    if got.same then intro = intro .. " They are the same build." end
+    local items = {}
+    if isMain then items[#items + 1] = { label = "Install here and update the network", value = "network" } end
+    items[#items + 1] = { label = "Install on this server only", value = "local" }
+    local pick = ui.menu(self.surf, {
+        title = "Download", items = (function()
+            local out = {}
+            for k, it in ipairs(items) do out[k] = { label = it.label } end
+            return out
+        end)(),
+        draw = function(page, ix, iy, iw) return page:wrapped(ix, iy, iw, 4, intro, page.c.muted) + 1 end,
+    })
+    if not pick then return nil end
+    local mode = items[pick].value
+    local ok, ierr = self:busy("Install", "Writing the new program...", function() return up.install(got.text, self.ctx.server and self.ctx.server:programPath() or "/zelnet") end)
+    self:audit("update_install", got.version, ierr, ok)
+    if not ok then return self:result("Install", false, ierr) end
+    if mode == "network" then
+        local pok, perr = self:busy("Update Network", "Signing and offering the update...", function() return self.ctx.server:pushUpdate(got.text, got.version) end)
+        self:audit("update_network", got.version, perr, pok)
+        if not pok then return self:result("Update Network", false, perr) end
+        self:say("Update Network", {
+            { text = "ZelNet " .. got.version .. " is installed here and offered to the network.", color = self.surf.c.ok },
+            "Satellites and devices download it, install it and reboot by themselves.",
+            "This server runs the new version after its next reboot. Wait until the satellites show " .. got.version .. " under Network, Realms, then use Reboot in the main menu.",
+        })
         return nil
     end
+    if ui.confirm(self.surf, "Install", "ZelNet " .. got.version .. " is installed. Reboot now to run it?", { yes = "Reboot", no = "Later" }) then
+        self:flushAll()
+        return "reboot"
+    end
+    return nil
+end
+
+function Console:fileUpdate()
+    local srv = self.ctx.server
     local r = ui.form(self.surf, {
         title = "Update Network",
         intro = "Give the path of the new program, on this computer or on a disk (for example /disk/zelnet.new). It is checked, signed and sent to every realm and device.",

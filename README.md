@@ -80,16 +80,39 @@ Put a pocket computer in the server's setup drive, unlock the console, and on th
 
 ## Getting the program into the game
 
-The ready-to-use program is `dist/zelnet` (about 220 KB, packed). The first time it runs it unpacks itself in place into the full program (about 530 KB). Pick whichever way works on your server:
+ZelNet installs and updates straight from this repository. The program is `dist/zelnet` (about 220 KB). It stays packed on disk and unpacks itself in memory each time it starts, which leaves room on the computer for an update to be swapped in safely.
 
-* **Copy the file directly** into the computer's folder in the world save: `saves/<world>/computer/<id>/zelnet` (single player) or `world/computer/<id>/zelnet` (server). Find the computer's id with the `id` command.
-* **Pastebin**: paste `dist/zelnet` into a new paste (it fits the 512 KB limit easily) and run `pastebin get <code> zelnet` in game. CC 1.63's default HTTP whitelist only allows pastebin.com.
+### 1. Allow GitHub in ComputerCraft (once per Minecraft server)
 
-Only servers need the file this way. Every other computer gets ZelNet from a provisioning disk.
+ComputerCraft 1.63 only lets computers reach pastebin.com and computercraft.info. In `config/ComputerCraft.cfg` on the Minecraft server, make sure HTTP is on and add GitHub's file host to the whitelist, then restart the server:
+
+```
+B:http_enable=true
+S:http_whitelist=*pastebin.com;*computercraft.info;*githubusercontent.com
+```
+
+### 2. First install on a server computer
+
+CraftOS 1.63 has no `wget`, so the first download uses the Lua prompt. Type `lua`, then this as one line:
+
+```
+h=http.get("https://raw.githubusercontent.com/salesmanhappymask/ZelNet/HEAD/dist/zelnet") f=fs.open("zelnet","w") f.write(h.readAll()) f.close() h.close()
+```
+
+Type `exit()` to leave the Lua prompt, then run `zelnet`. (Without HTTP you can also copy `dist/zelnet` into `saves/<world>/computer/<id>/zelnet`.)
+
+Only servers need this. Every other computer gets ZelNet from a provisioning pocket computer.
+
+### 3. Updating
+
+* **Whole network:** on the Main console open **Update network**, then **Download from the repo**, then **Install here and update the network**. Main installs the new build and offers it over the backbone; satellites and their devices download, install and reboot by themselves. Reboot Main once the satellites show the new version.
+* **One server:** **Update**, then **Download from the repo**, then **Install on this server only**, or run `zelnet update` from the shell.
+* Every build carries a build id (for example `1.0.0+29d058ec`) that changes with every change to the code, so any new commit to `dist/zelnet` counts as an update even when the version number stays the same.
+* To update from another branch or fork, set `updateUrl` in `/.zelnet/config` or run `zelnet update <url>`.
 
 ## First in-game test
 
-1. Main server: place an advanced computer with a wireless modem on top, a Cipher Block next to it (any six item stacks), and a disk drive. Put `zelnet` on it and run `zelnet`. Follow the wizard (Main server, realm `EARTH`).
+1. Main server: place an advanced computer with a wireless modem on top, a Cipher Block next to it (any six item stacks), and a disk drive. Download `zelnet` as above and run `zelnet`. Follow the wizard (Main server, realm `EARTH`).
 2. Client: put a pocket computer in the setup drive, unlock the console, and tap Client, Next, Write on the setup monitor. Put the pocket computer in a drive next to a new computer with a wireless modem and reboot that computer. Take it out when the installer finishes.
 3. On the client create an account and send yourself a message from a second client.
 4. Satellite: on the setup monitor create a Satellite server install on a pocket computer. Install it on a server in the other dimension with its own Cipher Block holding the same six items, then add the bridge on the Bridges page of both servers.
@@ -119,7 +142,10 @@ The program is assembled from the modules in `src/`:
 ```
 lua5.1 tools/check.lua .
 lua5.1 tools/build.lua . build/zelnet
+lua5.1 tools/dist.lua
 ```
+
+`tools/dist.lua` minifies and packs `build/zelnet` into `dist/zelnet`. Commit `dist/zelnet` together with the source change; that file is what servers download.
 
 Tests run with `lua5.1 tests/<name>.lua`. `lua5.1 tests/render_displays.lua` followed by `python3 tools/screenshot.py build/screens` renders every display screen to PNG for layout checks. `sim/` contains a ComputerCraft 1.63 world simulator used by the scenario tests. It runs the real CC 1.63 ROM, which is not stored in the repo; extract it from the mod jar once with `tools/extract_rom.sh path/to/ComputerCraft1.63.jar`.
 

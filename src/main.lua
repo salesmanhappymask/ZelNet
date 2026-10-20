@@ -86,6 +86,7 @@ function M.usage()
     say("  zelnet send <addr> <port> <text>")
     say("  zelnet ping <addr>")
     say("  zelnet version")
+    say("  zelnet update [url]  download the newest program from the repo")
     say("Programs load the library with dofile(\"/zelnet\").")
 end
 
@@ -95,7 +96,7 @@ function M.cli(args, env)
         M.usage()
         return
     elseif cmd == "version" then
-        say("ZelNet " .. version.program .. " (protocol " .. version.protocol .. ")")
+        say("ZelNet " .. version.full() .. " (protocol " .. version.protocol .. ")")
         return version.program
     elseif cmd == "setup" then
         return M.setupCommand(env)
@@ -107,11 +108,47 @@ function M.cli(args, env)
         return M.sendCommand(args[2], args[3], table.concat(text, " "))
     elseif cmd == "ping" then
         return M.pingCommand(args[2])
+    elseif cmd == "update" then
+        return M.updateCommand(args[2])
     elseif cmd == "run" then
         return M.run({ env = env })
     end
     say("Unknown command: " .. tostring(args[1]), colors.red)
     M.usage()
+end
+
+function M.updateCommand(url)
+    local up = tryNeed("updater")
+    if not up then
+        say("This computer gets ZelNet updates from its server.", colors.yellow)
+        return
+    end
+    local cfg = M.loadConfig()
+    local opts = cfg or {}
+    if url then opts = { updateUrl = url } end
+    say("ZelNet " .. version.full() .. " installed.")
+    say("Downloading " .. up.url(opts) .. " ...")
+    local got, err = up.fetch(opts)
+    if not got then
+        say(tostring(err), colors.red)
+        return
+    end
+    if got.same then
+        say("Already up to date (" .. got.version .. ").", colors.lime)
+        return got.version
+    end
+    local path = (cfg and cfg.programPath) or M.PROGRAM_PATH
+    local ok, ierr = up.install(got.text, path)
+    if not ok then
+        say("Cannot install: " .. tostring(ierr), colors.red)
+        return
+    end
+    say("Installed ZelNet " .. got.version .. " (" .. util.fmtBytes(got.size) .. ") as " .. path .. ".", colors.lime)
+    if cfg and cfg.role == "main" then
+        say("To update the whole network, open Update network on the console.")
+    end
+    say("Reboot or run zelnet to start it.")
+    return got.version
 end
 
 function M.loadConfig(path)
@@ -429,6 +466,18 @@ function M.fetchUpdate(n, authority, b)
     return text
 end
 
+function M.replaceFile(path, text)
+    local tmp = path .. ".dl"
+    local ok, err = util.writeFile(tmp, text)
+    if not ok then
+        pcall(fs.delete, tmp)
+        return nil, err
+    end
+    if fs.exists(path) then fs.delete(path) end
+    fs.move(tmp, path)
+    return true
+end
+
 function M.onDeviceUpdate(n, cfg, msg, state)
     local b = msg.data
     if not M.validOffer(b) then return end
@@ -440,7 +489,7 @@ function M.onDeviceUpdate(n, cfg, msg, state)
         n.log.warn("rejected an update offer with a bad signature")
         return
     end
-    if b.version == version.program or state.busy or state.done == b.sha then return end
+    if b.version == version.full() or state.busy or state.done == b.sha then return end
     state.busy = true
     n.log.info("downloading update " .. b.version)
     local text, err = M.fetchUpdate(n, authority, b)
@@ -451,11 +500,13 @@ function M.onDeviceUpdate(n, cfg, msg, state)
     end
     local prov = tryNeed("provision")
     local build = text
-    if prov and prov.isBundle(text) then
-        local okB, trimmed = pcall(prov.deviceBuild, text)
+    local full = prov and prov.expand and prov.expand(text) or text
+    if prov and full and prov.isBundle(full) then
+        local okB, trimmed = pcall(prov.deviceBuild, full)
         if okB and type(trimmed) == "string" and loadstring(trimmed, "=zelnet") then build = trimmed end
     end
-    local ok, werr = util.writeFile(state.path, build)
+    full = nil
+    local ok, werr = M.replaceFile(state.path, build)
     state.busy = false
     if not ok then
         n.log.warn("cannot install update " .. b.version .. ": " .. tostring(werr))

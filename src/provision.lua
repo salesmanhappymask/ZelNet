@@ -14,7 +14,7 @@ M.MAX_DIST = 728999
 M.TRIES = 16
 M.SERVER_ONLY = {
     storage = true, registry = true, directory = true, bridge = true, backbone = true,
-    server = true, tekmail = true, airlock = true, serverui = true, panels = true,
+    server = true, tekmail = true, airlock = true, serverui = true, panels = true, updater = true,
 }
 M.MAGIC = "ZNPK1"
 
@@ -111,10 +111,113 @@ function M.setProgramPath(path)
 end
 
 local function isBundle(text)
-    return type(text) == "string" and text:find("__mods[\"main\"]", 1, true) ~= nil
+    return type(text) == "string" and text:sub(1, 27) ~= 'local __mods, ZN = "packed"' and text:find("__mods[\"main\"]", 1, true) ~= nil
 end
 
 M.isBundle = isBundle
+
+local STUB = [==[
+local __mods, ZN = "packed", { program = "%PROGRAM%", build = "%BUILD%", size = %LEN% }
+local P = [@@[
+%PACKED%]@@]
+local V = {}
+do
+local k = 0
+for c = 36, 126 do
+if c ~= 96 then V[c] = k k = k + 1 end
+end
+end
+local function breathe()
+if os and os.queueEvent and coroutine.running() then
+os.queueEvent("zn_unpack")
+os.pullEvent("zn_unpack")
+end
+end
+local function U(s)
+local out, n = {}, 0
+local pos, len = 1, #s
+local mark = 0
+while pos <= len do
+local q = string.find(s, "`", pos, true)
+local stop = len
+if q then stop = q - 1 end
+for k = pos, stop do
+n = n + 1
+out[n] = string.sub(s, k, k)
+end
+if not q then break end
+local c2 = string.byte(s, q + 1)
+if c2 == 96 then
+n = n + 1
+out[n] = "`"
+pos = q + 2
+else
+local v = V[c2]
+local a = V[string.byte(s, q + 2) or 0]
+local b = V[string.byte(s, q + 3) or 0]
+local ln, dist
+if v < 45 then
+ln = v + 5
+dist = a * 90 + b
+pos = q + 4
+else
+local c = V[string.byte(s, q + 4) or 0]
+ln = v - 39
+dist = a * 8100 + b * 90 + c
+pos = q + 5
+end
+local from = n - dist
+for k = 1, ln do
+n = n + 1
+out[n] = out[from + k]
+end
+end
+if n - mark > 20000 then
+mark = n
+breathe()
+end
+end
+return table.concat(out)
+end
+local prog = U(P)
+P = nil
+if #prog ~= ZN.size then error("ZelNet did not unpack correctly; download it again", 0) end
+local fn, err = loadstring(prog, "=zelnet")
+prog = nil
+if not fn then error(err, 0) end
+setfenv(fn, getfenv(1))
+return fn(...)
+]==]
+
+M.STUB_HEAD = 'local __mods, ZN = "packed"'
+
+function M.isPacked(text)
+    return type(text) == "string" and text:sub(1, #M.STUB_HEAD) == M.STUB_HEAD
+end
+
+function M.makeStub(build)
+    local packed = M.pack(build)
+    local level = 1
+    while packed:find("]" .. string.rep("=", level) .. "]", 1, true) do level = level + 1 end
+    local eq = string.rep("=", level)
+    local program = build:match('program%s*=%s*"(%d[%w%.%-_]*)"') or "0"
+    local buildId = build:match('build%s*=%s*"(%w+)"') or "dev"
+    local head = STUB:gsub("@@", eq):gsub("%%PROGRAM%%", program):gsub("%%BUILD%%", buildId):gsub("%%LEN%%", tostring(#build))
+    local i = head:find("%PACKED%", 1, true)
+    return head:sub(1, i - 1) .. packed .. head:sub(i + #"%PACKED%")
+end
+
+function M.expand(text)
+    if not M.isPacked(text) then return text end
+    local _, e, eq = text:find("local P = %[(=*)%[\n")
+    if not e then return nil, "damaged packed program" end
+    local close = text:find("]" .. eq .. "]", e + 1, true)
+    if not close then return nil, "damaged packed program" end
+    local out = M.unpack(text:sub(e + 1, close - 1))
+    local size = tonumber(text:match("size = (%d+)"))
+    if not out or (size and #out ~= size) then return nil, "damaged packed program" end
+    return out
+end
 
 function M.programText()
     local tried = {}
@@ -122,7 +225,7 @@ function M.programText()
         if type(path) ~= "string" or path == "" or tried[path] then return nil end
         tried[path] = true
         local text = util.readFile(path)
-        if text and isBundle(text) then return text end
+        if text and (isBundle(text) or M.isPacked(text)) then return text end
         return nil
     end
     local text = try(M.programPath)
@@ -381,7 +484,15 @@ function M.prepare(deviceCfg, opts)
     end
     if not text then return nil, err end
     local isServerRole = deviceCfg.role == "main" or deviceCfg.role == "satellite"
-    local build = isServerRole and M.serverBuild(text) or M.deviceBuild(text)
+    local build
+    if isServerRole and M.isPacked(text) then
+        build = text
+    else
+        local full, xerr = M.expand(text)
+        if not full then return nil, xerr end
+        text = full
+        build = isServerRole and M.serverBuild(text) or M.deviceBuild(text)
+    end
     if build ~= text and not loadstring(build, "=zelnet") then
         if not loadstring(text, "=zelnet") then return nil, "the program file does not compile" end
         build = text

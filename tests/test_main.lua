@@ -125,7 +125,7 @@ t.case("device update: bad mac, wrong source and bad checksum are refused", func
     env.run(function() main.onDeviceUpdate(n, cfg, { src = "EARTH", data = offer }, state) end, 60)
     t.eq(n.requests, 0)
     local same = util.copy(offer)
-    same.version = version.program
+    same.version = version.full()
     same.mac = crypto.mac(cfg.deviceKey, main.updateAad(same.version, #text, offer.sha))
     env.run(function() main.onDeviceUpdate(n, cfg, { src = "MARS", data = same }, state) end, 60)
     t.eq(n.requests, 0, "current version ignored")

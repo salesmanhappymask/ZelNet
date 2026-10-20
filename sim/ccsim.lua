@@ -739,6 +739,66 @@ function Computer:makeRedstoneApi()
     return rs
 end
 
+local function globMatch(pattern, host)
+    local lua = "^" .. pattern:gsub("[%^%$%(%)%%%.%[%]%+%-%?]", "%%%0"):gsub("%*", ".*") .. "$"
+    return host:match(lua) ~= nil
+end
+
+function M.httpAllowed(whitelist, url)
+    local host = tostring(url):match("^https?://([^/:]+)")
+    if not host then return nil, "URL not http" end
+    for pattern in tostring(whitelist or "*pastebin.com;*computercraft.info"):gmatch("[^;]+") do
+        if globMatch(pattern, host) then return true end
+    end
+    return nil, "Domain not permitted"
+end
+
+local function httpBody(text)
+    local lines = {}
+    for line in (text .. "\n"):gmatch("(.-)\r?\n") do lines[#lines + 1] = line end
+    if text:sub(-1) == "\n" then lines[#lines] = nil end
+    return lines
+end
+
+local function httpHandle(lines, code)
+    local pos = 0
+    local h = {}
+    function h.readLine()
+        pos = pos + 1
+        return lines[pos]
+    end
+    function h.readAll()
+        local rest = {}
+        for i = pos + 1, #lines do rest[#rest + 1] = lines[i] end
+        pos = #lines
+        return table.concat(rest, "\n")
+    end
+    function h.close() end
+    function h.getResponseCode() return code end
+    return h
+end
+
+function Computer:makeHttpApi()
+    local c = self
+    local api = {}
+    function api.request(url, post, headers)
+        if type(url) ~= "string" then error("Expected string", 2) end
+        local hcfg = c.world.config.http
+        local ok, err = M.httpAllowed(hcfg.whitelist, url)
+        if not ok then error(err, 2) end
+        c.world:schedule(hcfg.delay or 10, function()
+            local text = (hcfg.files or {})[url]
+            if type(text) == "string" then
+                c:queueEvent("http_success", url, httpHandle(httpBody(text), 200))
+            else
+                c:queueEvent("http_failure", url)
+            end
+        end)
+        return true
+    end
+    return api
+end
+
 function Computer:buildEnv()
     local c = self
     local env = {}
@@ -801,6 +861,7 @@ function Computer:buildEnv()
     env.redstone = rs
     env.rs = rs
     env.bit = bitops.ccApi()
+    if type(c.world.config.http) == "table" then env.http = c:makeHttpApi() end
     local wrapped = 0
     setmetatable(env, {
         __newindex = function(t, k, v)
