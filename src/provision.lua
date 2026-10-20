@@ -118,6 +118,10 @@ M.isBundle = isBundle
 
 local STUB = [==[
 local __mods, ZN = "packed", { program = "%PROGRAM%", build = "%BUILD%", size = %LEN% }
+if shell and shell.getRunningProgram and print then
+local ok, run = pcall(shell.getRunningProgram)
+if ok and type(run) == "string" and string.find(string.lower(run), "zelnet", 1, true) then print("Starting ZelNet " .. ZN.program .. "+" .. ZN.build .. " ...") end
+end
 local P = [@@[
 %PACKED%]@@]
 local V = {}

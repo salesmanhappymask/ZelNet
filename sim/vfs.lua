@@ -287,11 +287,24 @@ function HostMount.new(dir)
     local cached = hostCache[dir]
     if cached then return cached end
     local self = setmetatable({ dir = dir, nodes = { [""] = { children = {} } } }, HostMount)
-    local p = io.popen("find " .. shellQuote(dir) .. " -mindepth 1 -printf '%y %P\\n' 2>/dev/null")
     local entries = {}
+    local p = io.popen("find " .. shellQuote(dir) .. " -mindepth 1 -printf '%y %P\\n' 2>/dev/null")
     if p then
-        for line in p:lines() do entries[#entries + 1] = line end
+        local all = p:read("*a") or ""
         p:close()
+        for line in all:gmatch("[^\n]+") do entries[#entries + 1] = line end
+    end
+    if #entries == 0 and not dir:find("%s") then
+        for _, kind in ipairs({ "d", "f" }) do
+            local q = io.popen("find " .. dir .. " -mindepth 1 -type " .. kind)
+            if q then
+                local all = q:read("*a") or ""
+                q:close()
+                for line in all:gmatch("[^\n]+") do
+                    if line:sub(1, #dir + 1) == dir .. "/" then entries[#entries + 1] = kind .. " " .. line:sub(#dir + 2) end
+                end
+            end
+        end
     end
     table.sort(entries, function(a, b) return #a < #b or (#a == #b and a < b) end)
     for _, line in ipairs(entries) do

@@ -151,6 +151,12 @@ function M.updateCommand(url)
     return got.version
 end
 
+function M.stage(text)
+    if term and term.isColor and term.isColor() then term.setTextColor(colors.lightGray) end
+    print("ZelNet: " .. text)
+    if term and term.isColor and term.isColor() then term.setTextColor(colors.white) end
+end
+
 function M.loadConfig(path)
     return config.load(path or M.configPath)
 end
@@ -172,6 +178,7 @@ end
 
 function M.run(opts)
     opts = opts or {}
+    M.stage("reading the config")
     local cfg, err = M.loadConfig(opts.path)
     if not cfg then
         if err == "not configured" then
@@ -195,6 +202,7 @@ function M.run(opts)
             cfg = scfg
             opts.pendingAdmin = extra and extra.admin
         end
+        M.stage("starting the " .. tostring(cfg.role) .. " server " .. tostring(cfg.realm))
         return M.runServer(cfg, opts)
     end
     return M.runDevice(cfg, opts)
@@ -267,10 +275,12 @@ function M.buildServer(cfg, opts)
 end
 
 function M.startServer(ctx)
+    M.stage("checking the storage drives")
     local okInit, problems = ctx.storage:init()
     if not okInit and type(problems) == "table" then
         for _, p in ipairs(problems) do ctx.log.warn("storage: " .. tostring(p)) end
     end
+    M.stage("starting the network")
     ctx.server:start()
     ctx.tekmail:start()
     ctx.airlock:start()
@@ -316,6 +326,7 @@ function M.serverMain(ctx, opts)
 end
 
 function M.serveGuarded(cfg, opts, log)
+    M.stage("opening the cipher block")
     local cip, msg = M.openCipher(cfg)
     while not cip do
         log.warn(tostring(msg))
@@ -330,7 +341,9 @@ function M.serveGuarded(cfg, opts, log)
     elseif not cip then
         log.warn("no working cipher block: the backbone stays off, this realm works on its own")
     end
+    M.stage("loading storage and services")
     local ctx = M.buildServer(cfg, { log = log, cipher = cip, configPath = opts.path, modules = opts.modules })
+    M.stage("starting the console")
     return ctx.node:loop(function() return M.serverMain(ctx, opts) end)
 end
 
