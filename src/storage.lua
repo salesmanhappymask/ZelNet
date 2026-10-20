@@ -17,6 +17,7 @@ M.AUDIT_FLUSH = 3
 M.INFO_TTL = 10
 M.MAX_PROBLEMS = 20
 M.COUNT_LIMIT = 2000
+M.RECHECK = 5
 
 local ROLE_SET = {}
 for _, r in ipairs(M.ROLES) do ROLE_SET[r] = true end
@@ -114,7 +115,7 @@ end
 
 function Storage:checkRole(role)
     local drive = self:driveFor(role)
-    local r = { role = role, drive = drive }
+    local r = { role = role, drive = drive, checked = compat.now() }
     if not drive then
         r.base = self:localBase(role)
         r.mount = r.base
@@ -187,14 +188,39 @@ function Storage:hardware()
     return type(c) == "table" and c.kind == "hardware"
 end
 
+function Storage:retry(r)
+    if r.state ~= "offline" or not r.drive or compat.now() - (r.checked or 0) < M.RECHECK then return r end
+    return self:recheck(r.role)
+end
+
+function Storage:recheck(role)
+    local before = self.roles[role] and self.roles[role].state
+    local r = self:checkRole(role)
+    self.roles[role] = r
+    self.counts[role] = nil
+    if before ~= r.state then
+        if r.state == "offline" then
+            self:note(role .. ": " .. tostring(r.problem))
+            if self.ctx.emit then pcall(self.ctx.emit, "storage_offline", role) end
+        else
+            self.log.info("storage: " .. role .. " online on " .. tostring(r.drive or "local"))
+            if self.ctx.emit then pcall(self.ctx.emit, "storage_online", role) end
+            if role == "audit" then self:loadAudit() end
+        end
+    end
+    return r
+end
+
 function Storage:ready(role)
     self:ensureInit()
     if role ~= nil then
         local r = self.roles[role]
+        if r then r = self:retry(r) end
         return r ~= nil and r.state ~= "offline"
     end
     for _, name in ipairs(M.ROLES) do
         local r = self.roles[name]
+        if r then r = self:retry(r) end
         if not r or r.state == "offline" then return false end
     end
     return true
@@ -217,6 +243,7 @@ function Storage:resolve(role, rel)
     self:ensureInit()
     local r = self.roles[role]
     if not r then return nil, nil, "unknown role" end
+    r = self:retry(r)
     if rel ~= nil and not M.validRel(rel) then return r, nil, "bad path" end
     if not self:mounted(r) then return r, nil, "storage offline" end
     if rel == nil then return r, r.base end
@@ -462,20 +489,7 @@ function Storage:onDiskEvent(ev, side)
         local drive = self:driveFor(role)
         if drive and (side == nil or drive == side) then
             touched = true
-            local before = self.roles[role] and self.roles[role].state
-            local r = self:checkRole(role)
-            self.roles[role] = r
-            self.counts[role] = nil
-            if before ~= r.state then
-                if r.state == "offline" then
-                    self:note(role .. ": " .. tostring(r.problem))
-                    if self.ctx.emit then pcall(self.ctx.emit, "storage_offline", role) end
-                else
-                    self.log.info("storage: " .. role .. " online on " .. drive)
-                    if self.ctx.emit then pcall(self.ctx.emit, "storage_online", role) end
-                    if role == "audit" then self:loadAudit() end
-                end
-            end
+            self:recheck(role)
         end
     end
     if touched then

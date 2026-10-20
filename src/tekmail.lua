@@ -21,11 +21,13 @@ M.PASS_MAX = 64
 M.TOKEN_IDLE = 21600
 M.TOKENS_PER_USER = 4
 M.SESSIONS_MAX = 400
-M.REPLY_BUDGET = 6000
+M.REPLY_BUDGET = 7000
 M.REPLY_MAX = 7800
 M.OUTBOX_MAX = 100
 M.OUTBOX_BYTES = 40000
 M.OUTBOX_TRIES = 400
+M.OUTBOX_MAX_WAIT = 259200
+M.UNREACHABLE_RECHECK = 30
 M.OUTBOX_PARALLEL = 6
 M.RETRY_BASE = 10
 M.RETRY_MAX = 600
@@ -130,11 +132,12 @@ local function cost(t)
         local kl = type(k) == "string" and #k or 6
         local tv = type(v)
         if tv == "string" then
-            n = n + kl + 2 * #v + 4
+            local _, esc = v:gsub("[%c\"\\]", "")
+            n = n + kl + #v + 3 * esc + 4
         elseif tv == "number" then
-            n = n + kl + 22
+            n = n + kl + 20
         else
-            n = n + kl + 8
+            n = n + kl + 7
         end
     end
     return n
@@ -776,7 +779,7 @@ function TekMail:opSend(s, req)
     local acct = self.accounts[s.user]
     local id = validId(req.mid) and #req.mid <= 24 and (s.user .. "-" .. req.mid) or util.newId()
     local item = { id = id, from = s.user, fromRealm = self.realm, to = to, text = text, t = compat.stamp(), display = acct and acct.display or s.user }
-    local peerDisplay = self.accounts[to] and self.accounts[to].display or to
+    local peerDisplay = self.accounts[to] and self.accounts[to].display or nil
     local delivered = false
     if not remote then delivered = self:deliverLocal(item) == true end
     local rec, err = self:appendMail(s.user, to, item, { read = true, pending = not delivered, display = peerDisplay })
@@ -798,7 +801,7 @@ end
 function TekMail:outboxSnapshot()
     local list = {}
     for _, e in ipairs(self.outbox) do
-        list[#list + 1] = { id = e.id, item = e.item, home = e.home, tries = e.tries, created = e.created }
+        list[#list + 1] = { id = e.id, item = e.item, home = e.home, tries = e.tries, created = e.created, waited = e.waited }
     end
     return { v = 1, items = list }
 end
@@ -825,7 +828,7 @@ function TekMail:loadOutbox()
         for i, e in ipairs(t.items) do
             if type(e) == "table" and validId(e.id) and type(e.item) == "table" and not have[e.id] and util.normRealm(e.home) then
                 self.outbox[#self.outbox + 1] = {
-                    id = e.id, item = e.item, home = e.home, tries = tonumber(e.tries) or 0,
+                    id = e.id, item = e.item, home = e.home, tries = tonumber(e.tries) or 0, waited = tonumber(e.waited),
                     created = tonumber(e.created) or compat.stamp(), next = compat.now() + 2 + i,
                 }
                 have[e.id] = true
@@ -838,7 +841,9 @@ end
 
 function TekMail:pumpOutbox()
     local now = compat.now()
-    for _, e in ipairs(self.outbox) do
+    local list = {}
+    for i, e in ipairs(self.outbox) do list[i] = e end
+    for _, e in ipairs(list) do
         if self.inflight >= M.OUTBOX_PARALLEL then return end
         if not e.busy and (e.next or 0) <= now then self:attempt(e) end
     end
@@ -846,6 +851,15 @@ end
 
 function TekMail:attempt(e)
     local home = self:homeOf(e.item.to) or e.home
+    if home ~= self.realm and not self:reachable(home) then
+        local now = compat.now()
+        e.waited = (e.waited or 0) + math.max(0, now - (e.checked or now))
+        e.checked = now
+        e.next = now + M.UNREACHABLE_RECHECK
+        if e.waited > M.OUTBOX_MAX_WAIT then self:finishOutbox(e, "failed", "expired") end
+        return
+    end
+    e.checked = nil
     e.busy = true
     if home == self.realm then
         self:job(function()
@@ -1375,6 +1389,12 @@ function TekMail:renamePeer(old, new, display)
     end
     for _, e in ipairs(self.outbox) do
         if e.item.to == old then e.item.to = new end
+    end
+    for _, p in pairs(self.proxies) do
+        if p.user == old then
+            p.user = new
+            self.dirty.sessions = true
+        end
     end
 end
 

@@ -309,6 +309,7 @@ function Page:list(x, y, w, h, rows, offset, selected, actionPrefix)
                 bg = self.c.selected
                 fg = self.c.text
             end
+            if selected and not self.s.isColor then text = ((selected == i) and ">" or " ") .. tostring(text or "") end
             self.s:field(x, y + r - 1, w, text, fg, bg)
             if type(row) == "table" and row.right then
                 local rt = util.fitText(row.right, math.max(0, w - 2))
@@ -340,6 +341,12 @@ end
 local function isBack(action)
     return action == "back"
 end
+
+local function isCtrlKey(k)
+    return k ~= nil and (k == keys.leftCtrl or k == keys.rightCtrl)
+end
+
+M.isCtrl = isCtrlKey
 
 function M.footerButtons(page, x, y, w, left, right)
     if right then
@@ -389,7 +396,9 @@ function M.form(surf, opts)
             if not f.maxLen or #f.value < f.maxLen then f.value = f.value .. a end
             errMsg = nil
         elseif ev == "key" then
-            if a == keys.backspace then
+            if isCtrlKey(a) then
+                action = "back"
+            elseif a == keys.backspace then
                 fields[focus].value = fields[focus].value:sub(1, -2)
             elseif a == keys.tab or a == keys.down then
                 focus = focus % #fields + 1

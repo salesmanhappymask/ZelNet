@@ -260,6 +260,7 @@ function Airlock:handleMessage(senderID, msg)
     self:noteReport(rec, msg.type, isNew, wasOnline, oldOxy)
     local structural = isNew or wasOnline == false or oldOxy ~= rec.oxygenated or oldName ~= rec.name or oldRole ~= rec.role
     self:changed(rec, structural)
+    if self.urgent then self:save() end
     return true
 end
 
@@ -448,7 +449,6 @@ function Airlock:step(timers, ev, a, b)
     if ev == "rednet_message" then
         if type(b) == "table" and type(b.type) == "string" and b.type:sub(1, 4) == "alk_" then
             self:handleMessage(a, b)
-            if self.urgent then self:save() end
         end
     elseif ev == "timer" then
         if a == timers.discover then
