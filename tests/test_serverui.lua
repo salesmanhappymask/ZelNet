@@ -179,6 +179,55 @@ t.case("lock screen holds after three wrong passwords", function()
     t.eq(n, 1, "three failures make one audit entry")
 end)
 
+t.case("proximity unlock accepts a list of players", function()
+    t.eq(sui.playerText(" Steve, alex ,,Steve , Zel "), "Steve, alex, Zel")
+    t.eq(#sui.playerList(nil), 0)
+    t.eq(#sui.playerList({ "A", "a", "B" }), 2)
+    t.eq(sui.proximityHint({ adminPlayer = "Steve, Alex, Zel" }), "Steve +2")
+    t.eq(sui.proximityHint({ adminPlayer = "Steve" }), "Steve")
+    t.eq(sui.proximityHint({}), "off")
+    local prox = {
+        getTargets = function()
+            return {
+                Steve = { Distance = 9 },
+                Alex = { Distance = 2 },
+                Mallory = { Distance = 0.5 },
+            }
+        end,
+    }
+    local near, note, who = sui.scanTargets(prox, "steve, ALEX", 3)
+    t.eq(near, true)
+    t.eq(who, "ALEX")
+    t.ok(note:find("ALEX at 2.0", 1, true), note)
+    near, note, who = sui.scanTargets(prox, "Steve", 3)
+    t.eq(near, false)
+    t.eq(who, "Steve")
+    near = sui.scanTargets(prox, "Nobody, Other", 3)
+    t.eq(near, false)
+    t.eq((sui.scanTargets(prox, " , ", 3)), false)
+end)
+
+t.case("proximity unlock records who unlocked and locks when everyone left", function()
+    reset()
+    local cfg = newCfg()
+    cfg.adminPlayer = "Steve, Alex"
+    local ctx, rec = fakeCtx(cfg)
+    local con = sui.new(ctx, { noTasks = true })
+    con.locked = true
+    con:onSensorResult(true, "Alex at 1.0", "Alex")
+    local res
+    env.run(function() res = con:lockScreen() end, 30)
+    t.eq(res, "proximity")
+    t.eq(con.unlockedBy, "proximity")
+    t.ok(hasAudit(rec, "unlock", "proximity (Alex)"))
+    con:onSensorResult(true, "Steve at 2.0", "Steve")
+    for _ = 1, sui.SENSOR_MISSES - 1 do con:onSensorResult(false, "watching") end
+    t.eq(con.lockReq, nil)
+    con:onSensorResult(true, "Steve at 2.0", "Steve")
+    for _ = 1, sui.SENSOR_MISSES do con:onSensorResult(false, "watching") end
+    t.eq(con.lockReq, "left")
+end)
+
 t.case("proximity unlock needs the admin to leave after a lock", function()
     reset()
     local cfg = newCfg()

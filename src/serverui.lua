@@ -143,29 +143,55 @@ function M.findSensor()
     return nil
 end
 
-function M.scanTargets(prox, player, range)
+M.PLAYERS_MAX = 120
+
+function M.playerList(v)
+    local out, seen = {}, {}
+    local function add(name)
+        name = tostring(name):match("^%s*(.-)%s*$")
+        if name ~= "" and not seen[name:lower()] then
+            seen[name:lower()] = true
+            out[#out + 1] = name
+        end
+    end
+    if type(v) == "table" then
+        for _, name in ipairs(v) do add(name) end
+    elseif type(v) == "string" then
+        for name in v:gmatch("[^,]+") do add(name) end
+    end
+    return out
+end
+
+function M.playerText(v)
+    return table.concat(M.playerList(v), ", ")
+end
+
+function M.scanTargets(prox, players, range)
     if type(prox) ~= "table" then return false, "no sensor attached" end
-    if type(player) ~= "string" or player == "" then return false, "no player set" end
+    local list = M.playerList(players)
+    if #list == 0 then return false, "no player set" end
     range = tonumber(range) or M.SENSOR_RANGE
     local ok, targets = pcall(function() return prox.getTargets() end)
     if not ok or type(targets) ~= "table" then return false, "no sensor data" end
-    local want = player:lower()
-    local count, best, seenNoPos = 0, nil, false
+    local want = {}
+    for _, name in ipairs(list) do want[name:lower()] = name end
+    local count, best, bestName, seenNoPos = 0, nil, nil, nil
     for k, basic in pairs(targets) do
         count = count + 1
         local uname, dist = M.targetNameAndDist(prox, k, basic)
-        if type(uname) == "string" and uname:lower() == want then
+        local name = type(uname) == "string" and want[uname:lower()] or nil
+        if name then
             if dist == nil then
-                seenNoPos = true
+                seenNoPos = seenNoPos or name
             elseif best == nil or dist < best then
-                best = dist
+                best, bestName = dist, name
             end
         end
     end
     if best ~= nil then
-        return best <= range, player .. " at " .. util.fmtFixed(best, 1) .. " (needs " .. util.fmtFixed(range, 1) .. " or less)"
+        return best <= range, bestName .. " at " .. util.fmtFixed(best, 1) .. " (needs " .. util.fmtFixed(range, 1) .. " or less)", bestName
     end
-    if seenNoPos then return false, player .. " seen, no position data" end
+    if seenNoPos then return false, seenNoPos .. " seen, no position data" end
     return false, "watching (" .. count .. " targets)"
 end
 
@@ -582,7 +608,7 @@ function Console:drawLock(pw, errMsg)
     local y = iy
     surf:field(ix, y, iw, "This console is locked.", c.text, c.inset)
     y = y + 1
-    if cfg.adminPlayer and cfg.adminPlayer ~= "" then
+    if #M.playerList(cfg.adminPlayer) > 0 then
         local note = self.sensorNote or "starting sensor"
         surf:field(ix, y, iw, "Proximity: " .. note, c.muted, c.inset)
         y = y + 1
@@ -656,13 +682,16 @@ function Console:unlock(method)
     self.misses = 0
     self.lastInput = compat.now()
     if self.surf.target.setCursorBlink then self.surf.target.setCursorBlink(false) end
-    self:audit("unlock", nil, method, true)
-    self.log.info("console unlocked by " .. method)
+    local how = method
+    if method == "proximity" and self.nearWho then how = "proximity (" .. self.nearWho .. ")" end
+    self:audit("unlock", nil, how, true)
+    self.log.info("console unlocked by " .. how)
 end
 
-function Console:onSensorResult(near, note)
+function Console:onSensorResult(near, note, who)
     self.near = near and true or false
     self.sensorNote = note
+    self.nearWho = self.near and who or nil
     if not self.near then self.latch = false end
     if self.locked then
         if self.near and not self.latch then os.queueEvent("zn_prox_unlock") end
@@ -672,7 +701,7 @@ function Console:onSensorResult(near, note)
         else
             self.misses = self.misses + 1
             if self.misses >= M.SENSOR_MISSES then
-                self:audit("auto_lock", nil, "admin left the sensor range", true)
+                self:audit("auto_lock", nil, "no listed player in sensor range", true)
                 self:requestLock("left")
             end
         end
@@ -682,8 +711,8 @@ end
 function Console:sensorTask()
     local prox
     while true do
-        local player = self.cfg.adminPlayer
-        if type(player) ~= "string" or player == "" then
+        local players = M.playerList(self.cfg.adminPlayer)
+        if #players == 0 then
             self.sensorNote = nil
             sleep(M.SENSOR_RETRY)
         else
@@ -692,9 +721,9 @@ function Console:sensorTask()
                 if not prox then self.sensorNote = "no sensor attached" end
             end
             if prox then
-                local near, note = M.scanTargets(prox, player, self.cfg.adminRange)
+                local near, note, who = M.scanTargets(prox, players, self.cfg.adminRange)
                 if note == "no sensor data" then prox = nil end
-                self:onSensorResult(near, note)
+                self:onSensorResult(near, note, who)
                 sleep(self.locked and M.SENSOR_POLL or M.SENSOR_WATCH)
             else
                 self:onSensorResult(false, "no sensor attached")
@@ -1909,12 +1938,19 @@ function Console:eventLog()
     })
 end
 
+function M.proximityHint(cfg)
+    local list = M.playerList(cfg.adminPlayer)
+    if #list == 0 then return "off" end
+    if #list == 1 then return list[1] end
+    return list[1] .. " +" .. (#list - 1)
+end
+
 function Console:settings()
     while true do
         local cfg = self.cfg
         local choice = self:choose("Settings", "Changes are saved to the config", {
             { label = "Displays", hint = M.displayHint(cfg), value = "displays" },
-            { label = "Proximity unlock", hint = (cfg.adminPlayer and cfg.adminPlayer ~= "") and cfg.adminPlayer or "off", value = "sensor" },
+            { label = "Proximity unlock", hint = M.proximityHint(cfg), value = "sensor" },
             { label = "Lock timeout", hint = self:lockAfter() > 0 and util.fmtDuration(self:lockAfter()) or "never", value = "lock" },
             { label = "Intervals", hint = "beacon " .. tostring(cfg.beaconInterval) .. " hello " .. tostring(cfg.helloInterval), value = "intervals" },
             { label = "Message of the day", value = "motd" },
@@ -1927,14 +1963,15 @@ function Console:settings()
         elseif choice == "sensor" then
             local r = ui.form(self.surf, {
                 title = "Proximity Unlock",
-                intro = "An OpenCCSensors proximity sensor unlocks the console when this player stands close. Leave the name empty to turn it off.",
+                intro = "An OpenCCSensors proximity sensor unlocks the console when any of these players stands close. Separate names with commas. Leave it empty to turn it off.",
                 fields = {
-                    { label = "Player:", key = "player", value = cfg.adminPlayer or "", maxLen = 32 },
+                    { label = "Players:", key = "player", value = M.playerText(cfg.adminPlayer), maxLen = M.PLAYERS_MAX },
                     { label = "Range:", key = "range", value = tostring(cfg.adminRange or M.SENSOR_RANGE), numeric = true },
                 },
             })
             if r then
-                cfg.adminPlayer = r.player ~= "" and r.player or nil
+                local text = M.playerText(r.player)
+                cfg.adminPlayer = text ~= "" and text or nil
                 cfg.adminRange = util.clamp(tonumber(r.range) or M.SENSOR_RANGE, 1, 16)
                 if self:save() then self:audit("settings", "sensor", tostring(cfg.adminPlayer), true) end
             end
@@ -2530,11 +2567,11 @@ end
 function Wizard:sensor()
     local r = ui.form(self.surf, {
         title = "Console Lock",
-        intro = "The console locks after the idle time. An OpenCCSensors proximity sensor can unlock it when your player stands close; leave the player empty to skip.",
+        intro = "The console locks after the idle time. An OpenCCSensors proximity sensor can unlock it when a listed player stands close. Separate names with commas; leave it empty to skip.",
         submit = "Next",
         fields = {
             { label = "Idle lock (s):", key = "lock", value = tostring(self.cfg.lockAfter or M.LOCK_AFTER), numeric = true, required = true },
-            { label = "Player:", key = "player", value = self.cfg.adminPlayer or "", maxLen = 32 },
+            { label = "Players:", key = "player", value = M.playerText(self.cfg.adminPlayer), maxLen = M.PLAYERS_MAX },
             { label = "Range:", key = "range", value = tostring(self.cfg.adminRange or M.SENSOR_RANGE), numeric = true },
         },
     })
@@ -2542,7 +2579,8 @@ function Wizard:sensor()
     local v = math.floor(tonumber(r.lock) or M.LOCK_AFTER)
     if v ~= 0 then v = util.clamp(v, 30, 86400) end
     self.cfg.lockAfter = v
-    self.cfg.adminPlayer = r.player ~= "" and r.player or nil
+    local text = M.playerText(r.player)
+    self.cfg.adminPlayer = text ~= "" and text or nil
     self.cfg.adminRange = util.clamp(tonumber(r.range) or M.SENSOR_RANGE, 1, 16)
     return "next"
 end
