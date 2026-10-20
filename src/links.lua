@@ -183,7 +183,7 @@ M.MAX_NEIGHBORS = 256
 
 function LinkSet:pruneNeighbors(now)
     local n = 0
-    for cid, nb in pairs(self.neighbors) do
+    for cid, nb in compat.spairs(self.neighbors) do
         if now - nb.t > 120 then
             self.neighbors[cid] = nil
         else

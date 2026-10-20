@@ -819,6 +819,8 @@ function Computer:buildEnv()
     for _, k in ipairs({ "assert", "error", "ipairs", "next", "pairs", "rawequal", "rawget", "rawset", "select", "setmetatable", "getmetatable", "tonumber", "tostring", "type", "unpack" }) do
         env[k] = hostG[k]
     end
+    env.next = util.strictNext
+    env.pairs = util.strictPairs
     env._VERSION = "Lua 5.1"
     env._G = env
     env.string = util.copy(string)

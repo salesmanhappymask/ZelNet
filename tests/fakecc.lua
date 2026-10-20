@@ -40,8 +40,11 @@ function M.install(opts)
             p = norm(p)
             files[p] = nil
             dirs[p] = nil
-            for k in pairs(files) do if k:sub(1, #p + 1) == p .. "/" then files[k] = nil end end
-            for k in pairs(dirs) do if k:sub(1, #p + 1) == p .. "/" then dirs[k] = nil end end
+            for _, t in ipairs({ files, dirs }) do
+                local gone = {}
+                for k in pairs(t) do if k:sub(1, #p + 1) == p .. "/" then gone[#gone + 1] = k end end
+                for _, k in ipairs(gone) do t[k] = nil end
+            end
         end,
         move = function(a, b)
             a, b = norm(a), norm(b)

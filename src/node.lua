@@ -312,7 +312,7 @@ function Node:choosePair()
     local now = compat.now()
     local window = (self.cfg.beaconInterval or 10) * 2.6
     local maxSeq = -1
-    for id, c in pairs(self.cands) do
+    for id, c in compat.spairs(self.cands) do
         if now - c.t > window then
             self.cands[id] = nil
         elseif c.seq > maxSeq then
@@ -785,7 +785,7 @@ function Node:deviceTimers()
     self:every(5, function()
         if self.parent and self.waitq.size() > 0 and self.connected then self:flushWaiting() end
         local now = compat.now()
-        for cid, r in pairs(self.downRoutes) do
+        for cid, r in compat.spairs(self.downRoutes) do
             if now - r.t > 600 then self.downRoutes[cid] = nil end
         end
     end, "housekeeping")

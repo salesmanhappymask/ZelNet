@@ -413,7 +413,7 @@ end
 
 function TekMail:dropSessions(user, keep)
     local byVia = {}
-    for token, s in pairs(self.sess) do
+    for token, s in compat.spairs(self.sess) do
         if s.user == user and token ~= keep then
             self.sess[token] = nil
             if s.via then
@@ -1108,7 +1108,7 @@ function TekMail:scheduleRoomSave()
 end
 
 function TekMail:saveRooms()
-    for name in pairs(self.roomDirty) do
+    for name in compat.spairs(self.roomDirty) do
         local r = self.rooms[name]
         self.roomDirty[name] = nil
         if r then
@@ -1139,7 +1139,7 @@ end
 function TekMail:notifyWatchers(roomName, m, exceptClient)
     local now = compat.now()
     local body = { op = "notify", kind = "chat", room = roomName, from = m.user, text = preview(m.text, M.NOTIFY_PREVIEW), seq = m.seq }
-    for client, w in pairs(self.watch) do
+    for client, w in compat.spairs(self.watch) do
         if now - w.t > M.WATCH_TTL then
             self.watch[client] = nil
         elseif w.room == roomName and client ~= exceptClient then
@@ -1570,28 +1570,28 @@ end
 
 function TekMail:housekeeping()
     local now = compat.now()
-    for token, s in pairs(self.sess) do
+    for token, s in compat.spairs(self.sess) do
         if now - s.last > M.TOKEN_IDLE then
             self.sess[token] = nil
             self.dirty.sessions = true
         end
     end
-    for token, p in pairs(self.proxies) do
+    for token, p in compat.spairs(self.proxies) do
         if now - p.last > M.TOKEN_IDLE then
             self.proxies[token] = nil
             self.dirty.sessions = true
         end
     end
-    for client, w in pairs(self.watch) do
+    for client, w in compat.spairs(self.watch) do
         if now - w.t > M.WATCH_TTL then self.watch[client] = nil end
     end
-    for client, f in pairs(self.fails) do
+    for client, f in compat.spairs(self.fails) do
         if now - f.t > M.LOGIN_WINDOW then self.fails[client] = nil end
     end
-    for client, c in pairs(self.creates) do
+    for client, c in compat.spairs(self.creates) do
         if now - c.t > M.CREATE_WINDOW then self.creates[client] = nil end
     end
-    for user, t in pairs(self.lastPost) do
+    for user, t in compat.spairs(self.lastPost) do
         if now - t > 60 then self.lastPost[user] = nil end
     end
     local d = self.dirty
@@ -1723,7 +1723,7 @@ function TekMail:conversationCount()
         end
         n = n + (c or 0)
     end
-    for user in pairs(self.convCounts) do
+    for user in compat.spairs(self.convCounts) do
         if not self.accounts[user] then self.convCounts[user] = nil end
     end
     return n

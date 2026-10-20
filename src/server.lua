@@ -507,7 +507,7 @@ end
 
 function Server:dropSubscriber(addr)
     local n = 0
-    for key, e in pairs(self.topics) do
+    for key, e in compat.spairs(self.topics) do
         if e.subs[addr] then
             e.subs[addr] = nil
             n = n + 1
@@ -544,7 +544,7 @@ function Server:publishLocal(topic, data, from, retain)
     local n = 0
     for key, e in pairs(self.topics) do
         if util.topicMatches(key, topic) then
-            for addr, exp in pairs(e.subs) do
+            for addr, exp in compat.spairs(e.subs) do
                 if exp < now then
                     e.subs[addr] = nil
                 elseif not sent[addr] then
@@ -790,24 +790,24 @@ function Server:housekeeping()
         self.log.info("device offline: " .. name)
         self.node:emit("device_offline", name)
     end
-    for cid, r in pairs(self.down) do
+    for cid, r in compat.spairs(self.down) do
         if now - r.t > M.DOWN_ROUTE_TTL then self.down[cid] = nil end
     end
     for _, tbl in ipairs({ self.rate, self.linkRate, self.errRate, self.badRate }) do
-        for k, r in pairs(tbl) do
+        for k, r in compat.spairs(tbl) do
             if now - r.start > M.RATE_WINDOW * 6 then tbl[k] = nil end
         end
     end
-    for k, t in pairs(self.pubTimes) do
+    for k, t in compat.spairs(self.pubTimes) do
         if now - t > 5 then self.pubTimes[k] = nil end
     end
-    for key, e in pairs(self.topics) do
-        for addr, exp in pairs(e.subs) do
+    for key, e in compat.spairs(self.topics) do
+        for addr, exp in compat.spairs(e.subs) do
             if exp < now then e.subs[addr] = nil end
         end
         if not e.retained and next(e.subs) == nil then self.topics[key] = nil end
     end
-    for k, t in pairs(self.noted) do
+    for k, t in compat.spairs(self.noted) do
         if now - t > 3600 then self.noted[k] = nil end
     end
     if self.reg.waitStorage then self.reg:flush() end

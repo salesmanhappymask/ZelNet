@@ -1,3 +1,13 @@
+local hostNext, hostPairs = next, pairs
+next = function(t, k)
+    if k ~= nil and type(t) == "table" and rawget(t, k) == nil then error("invalid key to 'next'", 2) end
+    return hostNext(t, k)
+end
+pairs = function(t)
+    if type(t) ~= "table" then return hostPairs(t) end
+    return next, t, nil
+end
+
 local M = {}
 local passed, failed = 0, 0
 local current = "?"

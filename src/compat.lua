@@ -120,6 +120,24 @@ function M.stamp()
     return day * 24 + t
 end
 
+function M.spairs(t)
+    local keys, n = {}, 0
+    for k in pairs(t) do
+        n = n + 1
+        keys[n] = k
+    end
+    local i = 0
+    return function()
+        while i < n do
+            i = i + 1
+            local k = keys[i]
+            local v = t[k]
+            if v ~= nil then return k, v end
+        end
+        return nil
+    end
+end
+
 local breathCount = 0
 local breathEvery = 40
 

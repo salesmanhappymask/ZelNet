@@ -21,7 +21,10 @@ local function drive(name, mount, opts)
 end
 
 local function clean()
-    for path in pairs(env.files()) do env.files()[path] = nil end
+    local all = env.files()
+    local gone = {}
+    for path in pairs(all) do gone[#gone + 1] = path end
+    for _, path in ipairs(gone) do all[path] = nil end
     fs.delete("/.zelnet")
     fs.delete("/disk")
     fs.delete("/disk2")

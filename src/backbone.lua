@@ -601,7 +601,7 @@ function Backbone:maintain()
     local hello = self:helloInterval()
     local route = self:routeInterval()
     local changed = false
-    for key, nb in pairs(self.neighbors) do
+    for key, nb in compat.spairs(self.neighbors) do
         local limit = nb.kind == "bridge" and math.max(route * 4, 120) or (hello * 3 + 5)
         if nb.up and now - (nb.lastSeen or 0) > limit then
             nb.up = false
@@ -619,10 +619,10 @@ function Backbone:maintain()
         end
     end
     if changed then self:recompute() end
-    for r, rt in pairs(self.routes) do
+    for r, rt in compat.spairs(self.routes) do
         if rt.metric >= M.INF and now - (rt.dead or now) > route * 2 then self.routes[r] = nil end
     end
-    for cid, r in pairs(self.bad) do
+    for cid, r in compat.spairs(self.bad) do
         if now - r.start > M.BAD_WINDOW * 6 then self.bad[cid] = nil end
     end
 end

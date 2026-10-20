@@ -934,7 +934,7 @@ function Feed:pump()
         self.olderId = nil
         if app.session then self:onOlder(reply, msg) end
     end
-    for id, key in pairs(self.sends) do
+    for id, key in compat.spairs(self.sends) do
         if app:ready(id) then
             local reply, msg = app:take(id)
             self.sends[id] = nil

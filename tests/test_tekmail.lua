@@ -86,7 +86,10 @@ local function drain(n)
 end
 
 local function wipe()
-    for path in pairs(env.files()) do env.files()[path] = nil end
+    local all = env.files()
+    local gone = {}
+    for path in pairs(all) do gone[#gone + 1] = path end
+    for _, path in ipairs(gone) do all[path] = nil end
 end
 
 local function c(r, client, body) return r.tm:handleClient(client, body) end

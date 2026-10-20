@@ -20,6 +20,18 @@ function M.native(fn)
     end
 end
 
+local hostNext, hostPairs, rawget = next, pairs, rawget
+
+function M.strictNext(t, k)
+    if k ~= nil and type(t) == "table" and rawget(t, k) == nil then error("invalid key to 'next'", 2) end
+    return hostNext(t, k)
+end
+
+function M.strictPairs(t)
+    if type(t) ~= "table" then return hostPairs(t) end
+    return M.strictNext, t, nil
+end
+
 function M.fail(msg)
     error(msg, 0)
 end
