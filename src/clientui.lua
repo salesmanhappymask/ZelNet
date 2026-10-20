@@ -736,7 +736,11 @@ function Feed:fetch()
     end
     self.gen = (self.gen or 0) + 1
     self.fetchGen = self.gen
-    self.fetchId = self.app:async(self:body(self.since), { retries = 1 })
+    local from = self.since
+    for seq, flag in pairs(self.flags or {}) do
+        if flag == "p" and seq - 1 < from then from = seq - 1 end
+    end
+    self.fetchId = self.app:async(self:body(from), { retries = 1 })
 end
 
 function Feed:older()
@@ -775,8 +779,18 @@ function Feed:merge(list)
         local seq = tonumber(m.seq)
         if seq and not self.seen[seq] then
             self.seen[seq] = true
+            self.flags = self.flags or {}
+            self.flags[seq] = (m.failed and "f") or (m.pending and "p") or ""
             m.seq = seq
             fresh[#fresh + 1] = m
+        elseif seq and self.flags then
+            local flag = (m.failed and "f") or (m.pending and "p") or ""
+            if self.flags[seq] ~= nil and self.flags[seq] ~= flag then
+                self.flags[seq] = flag
+                m.seq = seq
+                local e = self:entry(m)
+                self.view:update(e.key, { note = e.note or false, noteColor = e.noteColor })
+            end
         end
     end
     table.sort(fresh, function(a, b) return a.seq < b.seq end)
