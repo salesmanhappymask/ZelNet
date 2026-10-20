@@ -42,6 +42,7 @@ local DEFAULTS = {
     worldHeight = 256,
     computerSpace = 1000000,
     floppySpace = 125000,
+    pocketSpace = 1000000,
     towerRange = 3000,
     towerRangeStorm = 2400,
     miniAntennaRange = 650,
@@ -259,6 +260,10 @@ end
 
 function World:floppy(opts)
     return periph.floppy(self, opts)
+end
+
+function World:pocket(opts)
+    return periph.pocket(self, opts)
 end
 
 function World:tesseract(opts)

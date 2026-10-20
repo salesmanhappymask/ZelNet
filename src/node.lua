@@ -16,6 +16,7 @@ Node.__index = Node
 M.MAX_HANDLERS = 24
 M.INBOX_MAX = 64
 M.OUTQ_MAX = 64
+M.TRACE_MAX = 150
 
 function M.new(cfg, opts)
     opts = opts or {}
@@ -61,7 +62,18 @@ function M.new(cfg, opts)
     self.wakePending = false
     self.running = false
     self.started = compat.now()
+    self.traceRing = util.newRing(M.TRACE_MAX)
+    self.traceSeq = 0
+    if self.log.listen then
+        local me = self
+        self.log.listen(function(e) me:trace(e.level, e.text) end)
+    end
     return self
+end
+
+function Node:trace(kind, text)
+    self.traceSeq = self.traceSeq + 1
+    self.traceRing.push({ n = self.traceSeq, t = compat.now(), s = compat.stamp(), kind = kind, text = util.sanitize(text) })
 end
 
 function Node:emit(event, ...)

@@ -14,7 +14,7 @@ M.MAX_DIST = 728999
 M.TRIES = 16
 M.SERVER_ONLY = {
     storage = true, registry = true, directory = true, bridge = true, backbone = true,
-    server = true, tekmail = true, airlock = true, serverui = true,
+    server = true, tekmail = true, airlock = true, serverui = true, panels = true,
 }
 M.MAGIC = "ZNPK1"
 
@@ -46,8 +46,10 @@ local function toSet(list)
     return set
 end
 
-function M.excludeFor(cfg)
+function M.excludeFor(cfg, keepSetup)
     local set = {}
+    local disp = type(cfg) == "table" and cfg.displays
+    if not keepSetup and type(disp) == "table" and type(disp.drive) == "string" then set[disp.drive] = true end
     local st = type(cfg) == "table" and cfg.storage
     if type(st) == "table" and type(st.drives) == "table" then
         for _, d in pairs(st.drives) do
@@ -409,7 +411,7 @@ local function checkDrive(driveName)
     if type(driveName) ~= "string" or not peripheral.isPresent(driveName) then return nil, "drive not found" end
     if peripheral.getType(driveName) ~= "drive" then return nil, driveName .. " is not a disk drive" end
     if dcall(driveName, "isDiskPresent") ~= true then return nil, "no disk in " .. driveName end
-    if dcall(driveName, "hasData") ~= true then return nil, "the disk in " .. driveName .. " is not a floppy disk" end
+    if dcall(driveName, "hasData") ~= true then return nil, "the item in " .. driveName .. " is not a pocket computer or disk" end
     local mount = dcall(driveName, "getMountPath")
     if type(mount) ~= "string" or mount == "" then return nil, "the disk in " .. driveName .. " is not mounted" end
     return "/" .. mount:gsub("^/+", "")
@@ -504,9 +506,9 @@ function M.writePart(driveName, plan, i, opts)
     local mount, err = checkDrive(driveName)
     if not mount then return nil, err end
     local id = dcall(driveName, "getDiskID")
-    if id ~= nil and id == plan.firstDisk then return nil, "this is disk 1; insert another floppy" end
+    if id ~= nil and id == plan.firstDisk then return nil, "this is disk 1; insert another disk" end
     local _, foreign = diskFiles(mount)
-    if fs.exists(mount .. "/" .. M.FILES.config) then return nil, "this is disk 1; insert another floppy" end
+    if fs.exists(mount .. "/" .. M.FILES.config) then return nil, "this is disk 1; insert another disk" end
     local ok, cerr = clearDisk(mount, opts.wipe)
     if not ok then return nil, cerr end
     local text = partText(set, i)
@@ -688,6 +690,11 @@ if shell and fs.exists("/zelnet") then shell.run("/zelnet") end
 return
 end
 local cfgPath = J(here, "zelnet.cfg")
+if here == "" and fs.exists(cfgPath) then
+say("This pocket computer carries a ZelNet install.", colors.yellow)
+say("Put it into a disk drive next to the new computer and reboot that computer.")
+return
+end
 local cfgText = readAll(cfgPath)
 if not cfgText then
 finishOld()

@@ -133,7 +133,7 @@ function Storage:checkRole(role)
         return r
     end
     if not dcall(drive, "hasData") then
-        r.problem = "the disk in " .. drive .. " is not a floppy"
+        r.problem = "the item in " .. drive .. " is not a pocket computer or disk"
         return r
     end
     local mountName = dcall(drive, "getMountPath")

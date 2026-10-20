@@ -403,8 +403,23 @@ function M.floppy(world, opts)
     return f
 end
 
+local POCKET_ITEM_ID = 31965
+
+function M.pocket(world, opts)
+    opts = opts or {}
+    local f = M.floppy(world, { label = opts.label, files = opts.files, capacity = opts.capacity or world.config.pocketSpace })
+    f.id = POCKET_ITEM_ID
+    f.damage = 1
+    f.pocket = true
+    f.diskId = nil
+    return f
+end
+
 local function describe(item)
     if not item then return nil end
+    if item.pocket then
+        return { id = item.id, name = "Advanced Pocket Computer", rawName = "item.cc:pocketComputer", qty = 1, dmg = 1, maxdmg = 0, maxSize = 1 }
+    end
     if item.kind == "floppy" then
         return { id = item.id, name = "Floppy Disk", rawName = "item.ccdisk", qty = item.count or 1, dmg = 0, maxdmg = 0, maxSize = 1 }
     end

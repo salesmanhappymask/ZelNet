@@ -40,6 +40,8 @@ function M.updateAad(ver, size, sha)
     return "zn.update|" .. tostring(ver) .. "|" .. tostring(size) .. "|" .. tostring(sha)
 end
 
+M.TRACE_KINDS = { device = "in", backbone = "bb", flood = "flood", ["local"] = "out" }
+
 function M.new(ctx)
     local self = setmetatable({}, Server)
     local cfg = ctx.cfg
@@ -296,6 +298,9 @@ end
 function Server:routePacket(pkt, origin, dev)
     if type(pkt) ~= "table" or pkt.v ~= version.protocol then return end
     if type(pkt.dst) ~= "string" or type(pkt.src) ~= "string" or type(pkt.id) ~= "string" then return end
+    if pkt.port ~= "zn.hello" or origin ~= "local" then
+        self.node:trace(M.TRACE_KINDS[origin] or "pkt", pkt.src .. " > " .. pkt.dst .. " " .. tostring(pkt.port) .. (pkt.re and " reply" or ""))
+    end
     if pkt.dst == "*" then
         if origin == "device" and pkt.port:sub(1, 3) == "zn." then
             self:count("dropped")

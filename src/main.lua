@@ -501,7 +501,8 @@ function M.statusCommand()
     say("Network: " .. tostring(cfg.network) .. "  Realm: " .. tostring(cfg.realm))
     if config.isServer(cfg) then
         say("Main realm: " .. tostring(cfg.mainRealm))
-        say("Bridges: " .. #(cfg.bridges or {}) .. "  Monitors: " .. #(cfg.monitors or {}))
+        local d = cfg.displays or {}
+        say("Bridges: " .. #(cfg.bridges or {}) .. "  Setup drive: " .. tostring(d.drive or "none"))
         say("Console password: " .. (type(cfg.console) == "table" and "set" or "not set, run zelnet setup"))
         return cfg.role
     end

@@ -436,24 +436,52 @@ t.case("bridge setup helper picks gear and probes the send side", function()
     for _, n in ipairs({ "drive_21", "drive_22", "tesseract_1", "tesseract_2" }) do env.setPeripheral(n, nil) end
 end)
 
-t.case("status monitor view draws cards", function()
-    local mon = ft.new(39, 19, true)
-    mon.setTextScale = function() end
-    env.setPeripheral("monitor_1", { type = "monitor", methods = mon })
+t.case("display monitors draw activity, console tabs and setup", function()
+    local panels = need("panels")
+    local mons = {}
+    for name, size in pairs({ monitor_1 = { 121, 38 }, monitor_2 = { 121, 38 }, monitor_3 = { 15, 24 } }) do
+        local m = ft.new(size[1], size[2], true)
+        m.setTextScale = function() end
+        env.setPeripheral(name, { type = "monitor", methods = m })
+        mons[name] = m
+    end
     local cfg = newCfg()
-    cfg.monitors = { { name = "monitor_1", view = "status" }, { name = "monitor_9", view = "network" } }
+    cfg.displays = { activity = "monitor_1", console = "monitor_2", setup = "monitor_3" }
     local ctx = fakeCtx(cfg)
+    ctx.node.traceRing = util.newRing(20)
+    ctx.node.traceRing.push({ n = 1, t = 0, s = 30, kind = "in", text = "EARTH:5 > EARTH zm.mail" })
+    ctx.node.tasks = { { name = "rx", filter = nil }, { name = "worker", filter = "zn_work" } }
     local con = sui.new(ctx, { noTasks = true })
-    con:drawMonitors()
-    t.ok(mon.has("DEVICES"), mon.text())
-    t.ok(mon.has("ZelNet EARTH"))
-    cfg.monitors[1].view = "storage"
-    con:drawMonitors()
-    t.ok(mon.has("ACCOUNTS"), mon.text())
-    cfg.monitors[1].view = "network"
-    con:drawMonitors()
-    t.ok(mon.has("EARTH"))
-    env.setPeripheral("monitor_1", nil)
+    local p = panels.new(con)
+    p:sample()
+    p:drawAll()
+    t.ok(mons.monitor_1.has("LIVE TRAFFIC"), mons.monitor_1.text())
+    t.ok(mons.monitor_1.has("zm.mail"), mons.monitor_1.text())
+    t.ok(mons.monitor_1.has("PROCESSES"))
+    t.ok(mons.monitor_2.has("Overview"), mons.monitor_2.text())
+    t.ok(mons.monitor_2.has("DEVICES"))
+    t.ok(mons.monitor_3.has("locked."), mons.monitor_3.text())
+    for _, tab in ipairs(panels.TABS) do
+        p.tab = tab.id
+        p:drawAll()
+    end
+    p.tab = "drives"
+    p:drawAll()
+    t.ok(mons.monitor_2.has("DISK DRIVES"), mons.monitor_2.text())
+    con.locked = false
+    p:drawAll()
+    t.ok(mons.monitor_3.has("Client"), mons.monitor_3.text())
+    t.ok(mons.monitor_3.has("Satellite"), "Main offers satellites")
+    p:setupAction("role:router")
+    p:drawAll()
+    t.ok(mons.monitor_3.has("router1"), mons.monitor_3.text())
+    p:setupAction("key:DEL")
+    p:setupAction("key:x")
+    t.eq(p.st.name, "routerx")
+    p:setupAction("next")
+    t.eq(p.st.screen, "name")
+    t.eq(p.st.err, "No setup drive")
+    for name in pairs(mons) do env.setPeripheral(name, nil) end
 end)
 
 t.case("setup wizard creates a Main server config", function()

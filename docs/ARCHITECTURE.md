@@ -81,7 +81,8 @@ Module layout (dependency order, each file returns a table):
 | `airlock` | Airlock controller support (legacy rednet protocol). |
 | `provision` | Writes provisioning disks (program, config, installer). |
 | `ui` | ZelOS UI kit for terminals and monitors (frame buffer, header, cards, buttons, forms, lists, input). |
-| `serverui` | Server admin console, setup wizard, lock screen, status monitors. |
+| `serverui` | Server admin console, setup wizard, lock screen. |
+| `panels` | Server display wall: activity monitor (live traffic trace, packets per second, processes), touch console tabs, and the touch setup monitor that provisions onto the pocket computer in the setup drive. |
 | `clientui` | TekMail client screens. |
 | `routerui` | Router status screen. |
 | `main` | Entry point: argument parsing, role dispatch, library export. |

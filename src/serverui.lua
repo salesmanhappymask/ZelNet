@@ -20,8 +20,7 @@ M.SENSOR_RETRY = 10
 M.MAX_FAILS = 3
 M.FAIL_HOLD = 10
 M.GUIDE_WAIT = 60
-M.VIEWS = { "status", "storage", "network" }
-M.VIEW_TITLES = { status = "Status", storage = "Storage", network = "Network" }
+M.VIEW_TITLES = { realms = "Realms", routes = "Routes", neighbors = "Neighbors", links = "Links" }
 M.ROLE_TITLES = { client = "Client", router = "Router", endpoint = "Endpoint", satellite = "Satellite server", main = "Main server" }
 M.DIRECTIONS = { "north", "south", "east", "west", "up", "down" }
 M.INPUT_EVENTS = { key = true, char = true, mouse_click = true, mouse_scroll = true, mouse_drag = true, paste = true }
@@ -194,7 +193,6 @@ function M.new(ctx, opts)
     self.fails = 0
     self.holdUntil = 0
     self.unlockedBy = nil
-    self.monitorSurfs = {}
     self.noTasks = opts.noTasks
     self.ownThread = opts.ownThread
     return self
@@ -706,97 +704,6 @@ function Console:sensorTask()
     end
 end
 
-function Console:monitorTask()
-    while true do
-        local ok, err = pcall(self.drawMonitors, self)
-        if not ok then self.log.warn("monitor: " .. tostring(err)) end
-        if not self.locked then os.queueEvent("zn_console_tick") end
-        sleep(1)
-    end
-end
-
-function Console:drawMonitors()
-    local list = self.cfg.monitors or {}
-    for _, m in ipairs(list) do
-        if type(m) == "table" and type(m.name) == "string" and M.VIEW_TITLES[m.view] then
-            local s = self.monitorSurfs[m.name]
-            if s and not peripheral.isPresent(m.name) then s = nil end
-            if not s then
-                s = ui.attachMonitor(m.name, m.scale or self.cfg.monitorScale)
-                self.monitorSurfs[m.name] = s
-            end
-            if s then
-                local w, h = s.target.getSize()
-                if w ~= s.w or h ~= s.h then s:resize() end
-                local okDraw, derr = pcall(self.drawMonitor, self, s, m.view)
-                if not okDraw then
-                    self.monitorSurfs[m.name] = nil
-                    error(m.name .. ": " .. tostring(derr), 0)
-                end
-            end
-        end
-    end
-end
-
-function Console:drawMonitor(s, view)
-    local snap = self:snapshot()
-    local page = ui.page(s)
-    local c = page.c
-    page:header("ZelNet " .. tostring(self.cfg.realm), M.VIEW_TITLES[view])
-    local y, h = 3, s.h - 2
-    if view == "status" then
-        local used = M.drawCards(page, 1, y, s.w, h - 1, M.cards(c, snap, self.cfg))
-        local warn = (snap.status.warnings or {})[1]
-        if warn and y + used <= s.h then s:field(2, y + used, s.w - 2, warn, c.warn, c.bg) end
-    elseif view == "storage" then
-        M.drawStorageCards(page, 1, y, s.w, h, snap.storage)
-    else
-        M.drawNetworkView(page, 1, y, s.w, h, snap.status, self.ctx.server)
-    end
-    s:flush()
-end
-
-function M.drawStorageCards(page, x, y, w, h, info)
-    local c = page.c
-    local cards = {}
-    for _, r in ipairs(info or {}) do
-        local state = r.state or (r.present and "online" or "offline")
-        local cap = r.drive and 125000 or nil
-        cards[#cards + 1] = {
-            title = r.title or r.role, accent = r.present == false and c.bad or c.ok,
-            lines = {
-                { "Drive", r.drive or "computer" },
-                { "State", state, r.present == false and c.bad or c.ok },
-                { "Files", tostring(r.files or 0) },
-                { "Free", r.free and util.fmtBytes(r.free) or "?" },
-            },
-            used = cap and r.free and math.floor((cap - r.free) * 100 / cap) or nil,
-        }
-    end
-    return M.drawCards(page, x, y, w, h, cards)
-end
-
-function M.drawNetworkView(page, x, y, w, h, st, srv)
-    local s, c = page.s, page.c
-    local rows = {}
-    local realms = srv and srv.realms and select(2, pcall(srv.realms, srv)) or nil
-    if type(realms) ~= "table" then realms = {} end
-    for _, r in ipairs(realms) do
-        local label = r.realm .. (r.main and " (Main)" or "")
-        local right = r.realm == st.realm and "this server" or (r.reachable and ("metric " .. tostring(r.metric)) or "unreachable")
-        rows[#rows + 1] = { text = label, right = right, color = (r.reachable or r.realm == st.realm) and c.ok or c.bad }
-    end
-    for _, b in ipairs(st.bridges or {}) do
-        rows[#rows + 1] = {
-            text = "Bridge " .. tostring(b.peer), right = tostring(b.state) .. " q" .. tostring(b.queued or 0),
-            color = (b.state == "fault" or b.state == "unconfigured") and c.bad or c.accent,
-        }
-    end
-    local ix, iy, iw, ih = page:card(x + 1, y, w - 2, h, "Realms and bridges", c.accent)
-    if ix then page:list(ix, iy, iw, ih, rows, 0) end
-    return rows
-end
-
 function Console:dashboard()
     local surf = self.surf
     local timer = os.startTimer(1)
@@ -927,7 +834,11 @@ function Console:startTasks()
     if self.tasksStarted or self.noTasks or not self.n then return end
     self.tasksStarted = true
     self.n:spawn(function() self:sensorTask() end, "console-sensor")
-    self.n:spawn(function() self:monitorTask() end, "console-monitors")
+    local okP, panels = pcall(need, "panels")
+    if okP and panels then
+        self.panels = panels.new(self)
+        self.n:spawn(function() self.panels:run() end, "console-displays")
+    end
 end
 
 function Console:run()
@@ -1000,7 +911,7 @@ function Console:devices()
             return tostring(d.online or 0) .. " of " .. tostring(d.total or 0) .. " online"
         end,
         rows = function() return self:deviceRows() end,
-        empty = "No devices yet. Press n to provision a client, router or endpoint onto a floppy disk.",
+        empty = "No devices yet. Press n to provision a client, router or endpoint onto a pocket computer or disk.",
         onSelect = function(row) return self:deviceMenu(row.dev) end,
         actions = { { label = "New", key = "n", run = function() return self:newDevice() end } },
     })
@@ -1068,7 +979,7 @@ function Console:driveRows(prov, exclude)
         if not d.present then
             state, color = "no disk", c.muted
         elseif not d.hasData then
-            state, color = "not a floppy", c.muted
+            state, color = "not a disk", c.muted
         elseif (d.foreign or 0) > 0 then
             state, color = d.foreign .. " files", c.warn
         elseif d.zelnet then
@@ -1089,13 +1000,13 @@ function Console:pickDrive(title, exclude)
     local chosen
     self:listView({
         title = title or "Choose a Drive",
-        subtitle = "Put a floppy disk in a drive, then pick it",
+        subtitle = "Put a pocket computer or disk in a drive, then pick it",
         rows = function() return self:driveRows(prov, exclude) end,
         empty = "No free disk drive. Attach a disk drive to this computer (directly or with a wired modem). Drives used for storage or bridges are not listed.",
         onSelect = function(row)
             local d = row.drive
             if not d.present or not d.hasData then
-                self:say("Drive", "Put a floppy disk into " .. d.name .. " first.", self.surf.c.warn)
+                self:say("Drive", "Put a pocket computer or disk into " .. d.name .. " first.", self.surf.c.warn)
                 return nil
             end
             if (d.foreign or 0) > 0 then
@@ -1114,6 +1025,10 @@ end
 function Console:newDevice()
     local srv = self.ctx.server
     if not srv then return nil end
+    if self.provBusy then
+        self:say("New Device", "The setup monitor is writing a disk right now. Try again when it is done.", self.surf.c.warn)
+        return nil
+    end
     local roles = {
         { label = "Client", hint = "TekMail", value = "client" },
         { label = "Router", hint = "relay", value = "router" },
@@ -1145,15 +1060,23 @@ function Console:newDevice()
         self:say("New Device", "The provisioning module is missing from this program copy.", self.surf.c.bad)
         return nil
     end
-    local drive = self:pickDrive("Disk for " .. name, prov.excludeFor(self.cfg))
+    local drive = self:pickDrive("Disk for " .. name, prov.excludeFor(self.cfg, true))
     if not drive then return nil end
     local intro = "Write a " .. M.ROLE_TITLES[role] .. " disk for " .. name .. " in " .. drive.name .. "?"
-    if isSat then intro = intro .. " The satellite program needs about 2 floppy disks; keep spare floppies ready." end
+    if isSat then intro = intro .. " On floppy disks the satellite program needs 2 disks; a pocket computer holds it all." end
     if not ui.confirm(self.surf, "New Device", intro, { yes = "Write" }) then return nil end
     return self:writeDevice(role, name, drive, prov)
 end
 
 function Console:writeDevice(role, name, drive, prov)
+    self.provBusy = "terminal"
+    local r = packn(pcall(self.writeDeviceNow, self, role, name, drive, prov))
+    self.provBusy = nil
+    if not r[1] then error(r[2], 0) end
+    return compat.unpack(r, 2, r.n)
+end
+
+function Console:writeDeviceNow(role, name, drive, prov)
     local srv = self.ctx.server
     local dcfg, err = self:busy("New Device", "Creating keys...", function() return srv:provision(role, name) end)
     if type(dcfg) ~= "table" then
@@ -1173,7 +1096,7 @@ function Console:writeDevice(role, name, drive, prov)
         local done = false
         while not done do
             local go = ui.confirm(self.surf, "Disk " .. i .. " of " .. parts,
-                "Take disk " .. (i - 1) .. " out of " .. drive.name .. " and put an empty floppy in for disk " .. i .. " of " .. parts .. ".",
+                "Take disk " .. (i - 1) .. " out of " .. drive.name .. " and put an empty disk in for disk " .. i .. " of " .. parts .. ".",
                 { yes = "Write", no = "Stop" })
             if not go then
                 self:say("New Device", "The disk set is incomplete. Remove the device and provision it again.", self.surf.c.bad)
@@ -1903,6 +1826,7 @@ end
 function Console:assignStorage(info)
     local prov = self:provisionModule()
     local exclude = {}
+    if type(self.cfg.displays) == "table" and self.cfg.displays.drive then exclude[self.cfg.displays.drive] = true end
     for _, b in ipairs(self.cfg.bridges or {}) do
         if b.sendDrive then exclude[b.sendDrive] = true end
         if b.recvDrive then exclude[b.recvDrive] = true end
@@ -1915,7 +1839,7 @@ function Console:assignStorage(info)
     if prov then
         for _, d in ipairs(prov.drives(exclude)) do
             if d.present and d.hasData then
-                choices[#choices + 1] = { label = d.name, hint = (d.label or "floppy") .. (d.free and (" " .. util.fmtBytes(d.free)) or ""), value = d.name }
+                choices[#choices + 1] = { label = d.name, hint = (d.label or "disk") .. (d.free and (" " .. util.fmtBytes(d.free)) or ""), value = d.name }
             end
         end
     end
@@ -1981,7 +1905,7 @@ function Console:settings()
     while true do
         local cfg = self.cfg
         local choice = self:choose("Settings", "Changes are saved to the config", {
-            { label = "Status monitors", hint = tostring(#(cfg.monitors or {})), value = "monitors" },
+            { label = "Displays", hint = M.displayHint(cfg), value = "displays" },
             { label = "Proximity unlock", hint = (cfg.adminPlayer and cfg.adminPlayer ~= "") and cfg.adminPlayer or "off", value = "sensor" },
             { label = "Lock timeout", hint = self:lockAfter() > 0 and util.fmtDuration(self:lockAfter()) or "never", value = "lock" },
             { label = "Intervals", hint = "beacon " .. tostring(cfg.beaconInterval) .. " hello " .. tostring(cfg.helloInterval), value = "intervals" },
@@ -1990,8 +1914,8 @@ function Console:settings()
             { label = "Console password", value = "password" },
         })
         if not choice then return nil end
-        if choice == "monitors" then
-            self:monitorSettings()
+        if choice == "displays" then
+            self:displaySettings()
         elseif choice == "sensor" then
             local r = ui.form(self.surf, {
                 title = "Proximity Unlock",
@@ -2048,54 +1972,62 @@ function Console:settings()
     end
 end
 
-function Console:monitorSettings()
-    local cfg = self.cfg
-    cfg.monitors = cfg.monitors or {}
-    while true do
-        local names = ui.findMonitors()
-        local choices = {}
-        local views = {}
-        for _, m in ipairs(cfg.monitors) do views[m.name] = m.view end
-        for _, nme in ipairs(names) do choices[#choices + 1] = { label = nme, hint = views[nme] or "not used", value = nme } end
-        choices[#choices + 1] = { label = "Text scale", hint = tostring(cfg.monitorScale or 0.5), value = "scale" }
-        local pick = self:choose("Status Monitors", #names .. " monitor(s) attached", choices)
-        if not pick then return nil end
-        if pick == "scale" then
-            local v = ui.ask(self.surf, "Text Scale", "Scale:", { value = tostring(cfg.monitorScale or 0.5), intro = "0.5 to 5 in steps of 0.5." })
-            local num = tonumber(v)
-            if num then
-                cfg.monitorScale = util.clamp(math.floor(num * 2 + 0.5) / 2, 0.5, 5)
-                self.monitorSurfs = {}
-                self:save()
-            end
-        else
-            local vchoices = {}
-            for _, vname in ipairs(M.VIEWS) do vchoices[#vchoices + 1] = { label = M.VIEW_TITLES[vname], value = vname } end
-            vchoices[#vchoices + 1] = { label = "Not used", value = "none" }
-            local view = self:choose(pick, "What should it show?", vchoices)
-            if view then
-                M.setMonitor(cfg, pick, view)
-                self.monitorSurfs[pick] = nil
-                if view == "none" and peripheral.isPresent(pick) then
-                    local m = peripheral.wrap(pick)
-                    if m and m.clear then pcall(m.setBackgroundColor, colors.black) pcall(m.clear) end
-                end
-                if self:save() then self:audit("settings", "monitor " .. pick, view, true) end
-            end
-        end
-    end
+M.DISPLAY_ROLES = {
+    { key = "activity", label = "Activity:", hint = "6x3 monitor: live traffic" },
+    { key = "console", label = "Console:", hint = "6x3 monitor: console tabs" },
+    { key = "setup", label = "Setup:", hint = "1x2 monitor: device setup" },
+    { key = "drive", label = "Setup drive:", hint = "drive under the setup monitor" },
+}
+
+function M.displayHint(cfg)
+    local d = type(cfg.displays) == "table" and cfg.displays or {}
+    local n = 0
+    for _, r in ipairs(M.DISPLAY_ROLES) do if d[r.key] then n = n + 1 end end
+    return n .. " of " .. #M.DISPLAY_ROLES
 end
 
-function M.setMonitor(cfg, name, view)
-    cfg.monitors = cfg.monitors or {}
-    local keep = {}
-    for _, m in ipairs(cfg.monitors) do
-        if m.name ~= name then keep[#keep + 1] = m end
+function M.displayForm(surf, cfg)
+    local okP, panels = pcall(need, "panels")
+    if not okP then return nil end
+    local names = ui.findMonitors()
+    local d = type(cfg.displays) == "table" and cfg.displays or {}
+    local roleOf = {}
+    for _, r in ipairs(M.DISPLAY_ROLES) do
+        if d[r.key] and r.key ~= "drive" then roleOf[d[r.key]] = r.label:gsub(":$", "") end
     end
-    if view and view ~= "none" then keep[#keep + 1] = { name = name, view = view } end
-    table.sort(keep, function(a, b) return a.name < b.name end)
-    cfg.monitors = keep
-    return keep
+    panels.identify(names, roleOf)
+    local fields = {}
+    for _, r in ipairs(M.DISPLAY_ROLES) do
+        fields[#fields + 1] = { label = r.label, key = r.key, value = d[r.key] or "", hint = r.hint, maxLen = 24 }
+    end
+    local errMsg
+    local result
+    while true do
+        local r = ui.form(surf, {
+            title = "Displays", error = errMsg, submit = "Save",
+            intro = "Each monitor shows its name now. Type 12 or monitor_12 (drive_7 for the drive). Empty skips.",
+            fields = fields,
+        })
+        if not r then break end
+        for _, f in ipairs(fields) do f.value = r[f.key] or "" end
+        local out, err = panels.validateDisplays(r, cfg)
+        if out then
+            result = out
+            break
+        end
+        errMsg = err
+    end
+    panels.clearMonitors(names)
+    return result
+end
+
+function Console:displaySettings()
+    local out = M.displayForm(self.surf, self.cfg)
+    if not out then return nil end
+    self.cfg.displays = out
+    if self.panels then self.panels:reset() end
+    if self:save() then self:audit("settings", "displays", M.displayHint(self.cfg), true) end
+    return nil
 end
 
 function M.programVersion(text)
@@ -2189,9 +2121,9 @@ local Wizard = {}
 Wizard.__index = Wizard
 
 M.SETUP_STEPS = {
-    fresh = { "intro", "role", "network", "password", "admin", "cipher", "storage", "bridges", "monitors", "sensor", "finish" },
-    satellite = { "intro", "password", "admin", "cipher", "storage", "bridges", "monitors", "sensor", "finish" },
-    reconfigure = { "intro", "password", "cipher", "storage", "bridges", "monitors", "sensor", "finish" },
+    fresh = { "intro", "role", "network", "password", "admin", "cipher", "displays", "storage", "bridges", "sensor", "finish" },
+    satellite = { "intro", "password", "admin", "cipher", "displays", "storage", "bridges", "sensor", "finish" },
+    reconfigure = { "intro", "password", "cipher", "displays", "storage", "bridges", "sensor", "finish" },
 }
 
 function M.validUser(v)
@@ -2449,7 +2381,7 @@ function Wizard:storage()
     self.cfg.storage.drives = self.cfg.storage.drives or {}
     local pick = self:choose("Storage", "Where should accounts, mail and logs live?", {
         { label = "On this computer", hint = "simple", value = "local" },
-        { label = "On floppy drives", hint = "one per kind", value = "drives" },
+        { label = "On disk drives", hint = "one per kind", value = "drives" },
     })
     if not pick then return "back" end
     if pick == "local" then
@@ -2459,6 +2391,7 @@ function Wizard:storage()
     local ok, prov = pcall(need, "provision")
     if not ok then return "next" end
     local exclude = {}
+    if type(self.cfg.displays) == "table" and self.cfg.displays.drive then exclude[self.cfg.displays.drive] = true end
     for _, b in ipairs(self.cfg.bridges or {}) do
         if b.sendDrive then exclude[b.sendDrive] = true end
         if b.recvDrive then exclude[b.recvDrive] = true end
@@ -2468,11 +2401,11 @@ function Wizard:storage()
         local choices = { { label = "This computer", value = "local" } }
         for _, d in ipairs(prov.drives(exclude)) do
             if d.present and d.hasData then
-                choices[#choices + 1] = { label = d.name, hint = (d.label or "floppy") .. (d.free and (" " .. util.fmtBytes(d.free)) or ""), value = d.name }
+                choices[#choices + 1] = { label = d.name, hint = (d.label or "disk") .. (d.free and (" " .. util.fmtBytes(d.free)) or ""), value = d.name }
             end
         end
         local title = role:sub(1, 1):upper() .. role:sub(2)
-        local choice = self:choose("Storage: " .. title, "Put a floppy in each drive you want to use", choices)
+        local choice = self:choose("Storage: " .. title, "Put a pocket computer in each drive to use", choices)
         if not choice then return "back" end
         if choice ~= "local" then
             drives[role] = choice
@@ -2509,32 +2442,12 @@ function Wizard:bridges()
     end
 end
 
-function Wizard:monitors()
-    local names = ui.findMonitors()
-    if #names == 0 then return "skip" end
-    local cfg = self.cfg
-    cfg.monitors = cfg.monitors or {}
-    if #cfg.monitors == 0 and not self.monitorsSuggested then
-        self.monitorsSuggested = true
-        for i, nme in ipairs(names) do
-            if M.VIEWS[i] then M.setMonitor(cfg, nme, M.VIEWS[i]) end
-        end
-    end
-    while true do
-        local views = {}
-        for _, m in ipairs(cfg.monitors) do views[m.name] = m.view end
-        local choices = {}
-        for _, nme in ipairs(names) do choices[#choices + 1] = { label = nme, hint = views[nme] or "not used", value = nme } end
-        choices[#choices + 1] = { label = "Continue", value = "next" }
-        local pick = self:choose("Status Monitors", "Pick what each monitor shows", choices)
-        if not pick then return "back" end
-        if pick == "next" then return "next" end
-        local vchoices = {}
-        for _, v in ipairs(M.VIEWS) do vchoices[#vchoices + 1] = { label = M.VIEW_TITLES[v], value = v } end
-        vchoices[#vchoices + 1] = { label = "Not used", value = "none" }
-        local view = self:choose(pick, "What should it show?", vchoices)
-        if view then M.setMonitor(cfg, pick, view) end
-    end
+function Wizard:displays()
+    if #ui.findMonitors() == 0 then return "skip" end
+    local out = M.displayForm(self.surf, self.cfg)
+    if not out then return "back" end
+    self.cfg.displays = out
+    return "next"
 end
 
 function Wizard:sensor()
@@ -2586,7 +2499,7 @@ function Wizard:summary()
         "Cipher: " .. (cfg.cipherName or (cfg.allowSoftwareBackbone and "software" or "none")),
         "Storage: " .. (#drives > 0 and table.concat(drives, " ") or "this computer"),
         "Bridges: " .. #(cfg.bridges or {}),
-        "Monitors: " .. #(cfg.monitors or {}),
+        "Displays: " .. M.displayHint(cfg),
         "Admin account: " .. (self.extra.admin and self.extra.admin.user or "none"),
     }
     return lines

@@ -63,7 +63,7 @@ function M.applyDefaults(cfg)
         cfg.name = cfg.name or cfg.realm:lower()
         cfg.bridges = cfg.bridges or {}
         cfg.storage = cfg.storage or { drives = {} }
-        cfg.monitors = cfg.monitors or {}
+        cfg.displays = cfg.displays or {}
     end
     return cfg
 end
