@@ -228,16 +228,13 @@ end
 function MemMount:writeBytes(w, bytes)
     local len = #bytes
     if len == 0 then return true end
-    local free = w.ignore
-    local counted = len
-    if free > 0 then
-        local take = math.min(free, len)
-        w.ignore = free - take
-        counted = len - take
-    end
-    if counted > 0 then
-        if self:remaining() < counted then return false end
-        self.used = self.used + counted
+    local left = w.ignore - len
+    if left >= 0 then
+        w.ignore = left
+    else
+        w.ignore = 0
+        if -left > self.capacity - self.used then return false end
+        self.used = self.used - left
     end
     w.pending[#w.pending + 1] = bytes
     return true
@@ -470,13 +467,17 @@ end
 
 function FS:closeWriter(w)
     if self.writers[w] then
+        if w.drain then w.drain() end
         w.mount:flush(w)
         self.writers[w] = nil
     end
 end
 
 function FS:closeAll()
-    for w in pairs(self.writers) do w.mount:flush(w) end
+    for w in pairs(self.writers) do
+        if w.drain then w.drain() end
+        w.mount:flush(w)
+    end
     self.writers = {}
 end
 
@@ -492,8 +493,9 @@ function FS:copyRecursive(src, sm, sl, dst, dm, dl)
         local d = M.getDir(dl)
         if dl ~= "" and d ~= "" and not dm.mount:exists(d) then dm.mount:makeDir(d) end
         local w = dm.mount:openWrite(dl, false)
-        dm.mount:writeBytes(w, data)
+        local ok = dm.mount:writeBytes(w, data)
         dm.mount:flush(w)
+        if not ok then fail("Out of space") end
     end
 end
 
@@ -629,29 +631,60 @@ local function binaryReader(data)
     return h
 end
 
+local TEXT_CHUNK = 8192
+
 local function writerHandle(fsys, w, binary)
     local closed = false
     local h = {}
+    local native = util.native
     if binary then
-        h.write = function(v)
-            if closed then return end
+        h.write = native(function(v)
+            if closed then fail("Stream closed") end
             if type(v) == "number" then
                 local iv = util.toInt(v)
-                w.mount:writeBytes(w, char(iv % 256))
+                if not w.mount:writeBytes(w, char(iv % 256)) then fail("Out of space") end
+            end
+        end)
+    else
+        local buf, blen = {}, 0
+        local function push(bytes)
+            if #bytes == 0 then return end
+            buf[#buf + 1] = bytes
+            blen = blen + #bytes
+            if blen < 2 * TEXT_CHUNK then return end
+            local data = concat(buf)
+            local pos, full = 1, false
+            while #data - pos + 1 >= 2 * TEXT_CHUNK do
+                local chunk = sub(data, pos, pos + TEXT_CHUNK - 1)
+                pos = pos + TEXT_CHUNK
+                if not w.mount:writeBytes(w, chunk) then
+                    full = true
+                    break
+                end
+            end
+            local rest = sub(data, pos)
+            buf, blen = { rest }, #rest
+            if full then fail("Out of space") end
+        end
+        w.drain = function()
+            if blen > 0 then
+                local data = concat(buf)
+                buf, blen = {}, 0
+                w.mount:writeBytes(w, data)
             end
         end
-    else
-        h.write = function(v)
-            if closed then return end
-            w.mount:writeBytes(w, marshal.textToFileBytes(javaText(v)))
-        end
-        h.writeLine = function(v)
-            if closed then return end
-            w.mount:writeBytes(w, marshal.textToFileBytes(javaText(v)) .. "\n")
-        end
+        h.write = native(function(v)
+            if closed then fail("Stream closed") end
+            push(marshal.textToFileBytes(javaText(v)))
+        end)
+        h.writeLine = native(function(v)
+            if closed then fail("Stream closed") end
+            push(marshal.textToFileBytes(javaText(v)) .. "\n")
+        end)
     end
     h.flush = function()
         if closed then return end
+        if w.drain then w.drain() end
         w.mount:flush(w)
     end
     h.close = function()

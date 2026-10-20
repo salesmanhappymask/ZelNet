@@ -53,6 +53,7 @@ local DEFAULTS = {
     http = false,
     verbose = false,
     worldTime = 0,
+    restartDelayTicks = 50,
 }
 
 local function defaultRomPath()
@@ -290,7 +291,7 @@ function World:bitnetTransmit(sender, msg)
     local storm = self.storm[sdim]
     for _, d in ipairs(self.bitnet) do
         local ddim, dpos = d:location()
-        if ddim == sdim and dpos then
+        if ddim == sdim and dpos and d:registered() then
             local dist = util.dist(spos, dpos)
             local range = storm and d.stormRange or d.range
             if dist > 0 and dist <= range then
@@ -789,23 +790,13 @@ function Computer:buildEnv()
     end
     env.os = c:makeOs()
     env.fs = vfs.makeApi(c.fs)
-    env.term = termlib.makeApi(function() return c.term end, {
-        write = function(text, t)
-            if t.y ~= c.outY then
-                if c.outY ~= nil then c.outputBuf[#c.outputBuf + 1] = "\n" end
-                c.outY = t.y
-            end
-            c.outputBuf[#c.outputBuf + 1] = text
-        end,
-        scroll = function(n)
-            if c.outY then c.outY = c.outY - toInt(n) end
-        end,
-    })
+    env.term = termlib.makeApi(function() return c.term end)
     env.peripheral = c:makePeripheralApi()
     local rs = c:makeRedstoneApi()
     env.redstone = rs
     env.rs = rs
     env.bit = bitops.ccApi()
+    local wrapped = 0
     setmetatable(env, {
         __newindex = function(t, k, v)
             if k == "printError" and type(v) == "function" then
@@ -816,10 +807,18 @@ function Computer:buildEnv()
                     c:recordError(table.concat(parts))
                     return orig(...)
                 end)
-                setmetatable(t, nil)
-                return
+                wrapped = wrapped + 1
+            elseif k == "write" and type(v) == "function" then
+                local orig = v
+                rawset(t, k, function(s)
+                    c.outputBuf[#c.outputBuf + 1] = tostring(s)
+                    return orig(s)
+                end)
+                wrapped = wrapped + 1
+            else
+                rawset(t, k, v)
             end
-            rawset(t, k, v)
+            if wrapped >= 2 then setmetatable(t, nil) end
         end,
     })
     return env
@@ -829,6 +828,7 @@ function Computer:boot()
     if self.running then return false end
     local w = self.world
     self.bootCount = self.bootCount + 1
+    self.startTick = w.tick
     self.session = w:uid()
     self.running = true
     self.stopping = false
@@ -848,6 +848,7 @@ function Computer:boot()
         if loc ~= "" and loc ~= "rom" then self.fs.mounts[loc] = nil end
     end
     self.fs.writers = {}
+    self.hdd:remeasure()
     local env = self:buildEnv()
     self.env = env
     local fn, err = nativeLoadstring(w.biosSource, "=bios")
@@ -971,7 +972,7 @@ function Computer:advance(dt)
 end
 
 function Computer:tick()
-    if self.pendingBoot and not self.running then
+    if self.pendingBoot and not self.running and self.world.tick - (self.startTick or -1000) > self.world.config.restartDelayTicks then
         self.pendingBoot = nil
         self:boot()
     end

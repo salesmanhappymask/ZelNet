@@ -211,9 +211,7 @@ function Modem:send(ch, reply, payload)
             end
         end
         table.sort(targets, function(a, b) return a[1].uid < b[1].uid end)
-        w:schedule(1, function()
-            for _, t in ipairs(targets) do t[1]:receive(ch, reply, jpayload, t[2]) end
-        end)
+        for _, t in ipairs(targets) do t[1]:receive(ch, reply, jpayload, t[2]) end
     elseif self.cable then
         local cable = self.cable
         w:schedule(1, function()
@@ -533,6 +531,7 @@ end
 function Drive:mountFor(access)
     local media = self:media()
     if media then
+        if not self.mounts[access] then media.mount:remeasure() end
         local c = access.computer
         local i = 1
         while not self.mounts[access] and i < 1000 do
@@ -839,6 +838,15 @@ function M.bitnetAntenna(world, opts)
     return p
 end
 
+function BitNet:registered()
+    return not self.tower or self.complete
+end
+
+function BitNet:setComplete(on)
+    self.complete = on and true or false
+    return self
+end
+
 function BitNet:place(dim, pos)
     self.dim = dim
     self.pos = util.vec(pos)
@@ -885,12 +893,12 @@ function M.cipherBlock(world, opts)
         if type(text) == "number" then text = marshal.javaDouble(text) end
         if type(text) ~= "string" then fail("Invalid argument type, expected string") end
         return self:encrypt(text)
-    end)
+    end, false)
     p:def("decrypt", function(self, access, text)
         if type(text) == "number" then text = marshal.javaDouble(text) end
         if type(text) ~= "string" then fail("Invalid argument type, expected string") end
         return self:decrypt(text)
-    end)
+    end, false)
     opInventory(p)
     p:updateKey()
     return p
