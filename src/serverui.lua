@@ -1352,12 +1352,12 @@ function Console:network()
     end
 end
 
-function Console:networkRows(kind, srv)
+function Console:networkRows(kind, srv, status, realms)
     local c = self.surf.c
-    local st = self:snapshot().status or {}
+    local st = status or self:snapshot().status or {}
     local rows = {}
     if kind == "realms" then
-        for _, r in ipairs(self:call(srv, "realms") or {}) do
+        for _, r in ipairs(realms or self:call(srv, "realms") or {}) do
             local here = r.realm == self.cfg.realm
             rows[#rows + 1] = {
                 text = r.realm .. (r.main and " Main" or "") .. (r.prog and (" v" .. tostring(r.prog)) or ""),

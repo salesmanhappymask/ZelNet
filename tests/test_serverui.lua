@@ -464,6 +464,7 @@ t.case("display monitors draw activity, console tabs and setup", function()
     ctx.node.tasks = { { name = "rx", filter = nil }, { name = "worker", filter = "zn_work" } }
     local con = sui.new(ctx, { noTasks = true })
     local p = panels.new(con)
+    p:collect()
     p:sample()
     p:drawAll()
     t.ok(mons.monitor_1.has("LIVE TRAFFIC"), mons.monitor_1.text())

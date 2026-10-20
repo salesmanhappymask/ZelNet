@@ -496,12 +496,22 @@ function Computer:makeCoroutineLib()
         return co
     end
     self.create = create
+    local owner = setmetatable({}, { __mode = "k" })
+    self.pcallCreate = function(f)
+        local co = create(f)
+        local cur = nativeRunning()
+        if cur then owner[co] = owner[cur] or cur end
+        return co
+    end
     local lib = {}
     lib.create = create
     lib.resume = nativeResume
     lib.yield = nativeYield
     lib.status = nativeStatus
-    lib.running = nativeRunning
+    lib.running = function()
+        local co = nativeRunning()
+        return co and owner[co] or co
+    end
     lib.wrap = function(f)
         if type(f) ~= "function" then error("bad argument #1 to 'wrap' (Lua function expected)", 2) end
         local co = create(f)
@@ -811,7 +821,9 @@ function Computer:buildEnv()
     env.table = util.copy(table)
     env.math = c:makeMath()
     env.coroutine = c:makeCoroutineLib()
-    local cop = copcall.new({ create = c.create })
+    local cop = copcall.new({ create = c.pcallCreate, intercept = function(err)
+        if c.hardAbort then error(err, 0) end
+    end })
     env.pcall = cop.pcall
     env.xpcall = function(f, handler) return cop.xpcall(f, handler) end
     env.loadstring = function(s, name)

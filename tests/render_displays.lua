@@ -209,6 +209,7 @@ local p = panels.new(con)
 for _ = 1, 40 do
     p.history[#p.history + 1] = math.random(0, 14)
 end
+p:collect()
 p:sample()
 
 p:drawAll()

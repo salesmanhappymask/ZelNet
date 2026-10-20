@@ -10,6 +10,7 @@ M.SCALE = 0.5
 M.POCKET_MIN = 200000
 M.DRIVE_CACHE = 5
 M.HISTORY = 60
+M.HEAL_EVERY = 10
 M.ROLES = {
     { role = "client", label = "Client" },
     { role = "router", label = "Router" },
@@ -156,7 +157,58 @@ function M.new(con)
     self.drivesAt = -100
     self.drivesCache = {}
     self.errors = {}
+    self.data = { snap = {}, devices = {}, realms = {}, users = {}, air = {} }
+    self.healAt = 0
     return self
+end
+
+function Panels:collect()
+    local con = self.con
+    local ctx = con.ctx
+    local d = {}
+    d.snap = con:snapshot(true) or {}
+    d.devices = con:call(ctx.server, "devices") or {}
+    d.realms = con:call(ctx.server, "realms") or {}
+    if self:names().console then
+        d.users = con:call(ctx.tekmail, "listUsers") or {}
+        if ctx.airlock and ctx.airlock.enabled ~= false then
+            local ok, rows = pcall(con.airlockRows, con)
+            d.air = ok and rows or {}
+        end
+        local st = d.snap.status or {}
+        d.network = {}
+        for _, kind in ipairs({ "realms", "neighbors", "routes", "links" }) do
+            local ok, rows = pcall(con.networkRows, con, kind, ctx.server, st, d.realms)
+            d.network[kind] = ok and rows or {}
+        end
+    end
+    self.data = d
+end
+
+function Panels:heal(force)
+    local now = compat.now()
+    local locked = self.con.locked
+    if force or locked ~= self.lastLocked or now - self.healAt >= M.HEAL_EVERY then
+        self.healAt = now
+        self.lastLocked = locked
+        for _, s in pairs(self.surfs) do s:invalidate() end
+    end
+end
+
+function Panels:tick()
+    local ok, err = pcall(self.collect, self)
+    if not ok then
+        local text = "display data: " .. tostring(err)
+        if self.errors.collect ~= text then
+            self.errors.collect = text
+            self.con.log.warn(text)
+        end
+    else
+        self.errors.collect = nil
+    end
+    self:sample()
+    self:heal()
+    self:drawAll()
 end
 
 function Panels:names()
@@ -199,7 +251,8 @@ function Panels:guard(key, fn)
         self.errors[key] = text
         self.con.log.warn(text)
     end
-    self.surfs[key] = nil
+    local s = self.surfs[key]
+    if s and peripheral.isPresent(s.name) then s:invalidate() else self.surfs[key] = nil end
     return false
 end
 
@@ -224,23 +277,28 @@ function Panels:drawAll()
 end
 
 function Panels:run()
+    local due = 0
     local timer = os.startTimer(0)
     while true do
         local ev, a, b, c = os.pullEvent()
-        if ev == "timer" and a == timer then
-            self:sample()
-            self:drawAll()
-            timer = os.startTimer(1)
-        elseif ev == "monitor_touch" then
+        if ev == "monitor_touch" then
             self:touch(a, b, c)
         elseif ev == "monitor_resize" or ev == "peripheral" or ev == "peripheral_detach" then
             self.surfs = {}
-            self:drawAll()
+            due = 0
         elseif ev == "disk" or ev == "disk_eject" then
             self.drivesAt = -100
             if a == self:names().drive then self:guard("setup", self.drawSetup) end
         elseif ev == "zn_panel" then
             self:guard("setup", self.drawSetup)
+        end
+        local now = compat.now()
+        if now >= due then
+            due = now + 1
+            self:tick()
+            timer = os.startTimer(1)
+        elseif ev == "timer" and a == timer then
+            timer = os.startTimer(math.max(0.05, due - now))
         end
     end
 end
@@ -358,10 +416,9 @@ end
 function Panels:drawActivity()
     local s = self:surface("activity")
     if not s then return end
-    local con = self.con
     local page = ui.page(s)
     local c = page.c
-    local snap = con:snapshot()
+    local snap = self.data.snap
     local st = snap.status or {}
     header(page, "Activity", "ZelNet " .. tostring(self.cfg.realm))
     local W, H = s.w, s.h
@@ -406,8 +463,7 @@ end
 function Panels:activityTiles(c, st)
     local dev = st.devices or {}
     local realms, reach = 0, 0
-    local srv = self.con.ctx.server
-    local list = srv and srv.realms and select(2, pcall(srv.realms, srv)) or nil
+    local list = self.data.realms
     if type(list) == "table" then
         for _, r in ipairs(list) do
             realms = realms + 1
@@ -612,7 +668,7 @@ end
 function Panels:tab_overview(page, area)
     local s, c = page.s, page.c
     local sui = need("serverui")
-    local snap = self.con:snapshot()
+    local snap = self.data.snap
     local cardsH = math.min(area.h - 10, 16)
     local used = sui.drawCards(page, area.x, area.y, area.w, cardsH, sui.cards(c, snap, self.cfg))
     local y = area.y + used
@@ -664,7 +720,7 @@ end
 
 function Panels:tab_devices(page, area)
     local c = page.c
-    local list = self.con:call(self.con.ctx.server, "devices") or {}
+    local list = self.data.devices or {}
     local rows = {}
     local colorOf = { online = c.ok, pending = c.warn, revoked = c.bad }
     for _, d in ipairs(list) do
@@ -677,7 +733,7 @@ function Panels:tab_devices(page, area)
             colors = { status = colorOf[d.status] or c.muted },
         }
     end
-    local st = self.con:snapshot().status or {}
+    local st = self.data.snap.status or {}
     local dv = st.devices or {}
     self:listCard(page, area, "Devices", c.ok, tostring(dv.online or 0) .. " of " .. tostring(dv.total or 0) .. " online", {
         { key = "name", label = "Name", w = 18 }, { key = "role", label = "Role", w = 10 }, { key = "status", label = "Status", w = 9 },
@@ -689,7 +745,7 @@ end
 function Panels:tab_accounts(page, area)
     local c = page.c
     local tm = self.con.ctx.tekmail
-    local list = self.con:call(tm, "listUsers") or {}
+    local list = self.data.users or {}
     local rows = {}
     for _, u in ipairs(list) do
         rows[#rows + 1] = {
@@ -706,8 +762,6 @@ end
 
 function Panels:tab_network(page, area)
     local c = page.c
-    local con = self.con
-    local srv = con.ctx.server
     local quads = {
         { "Realms", "realms", c.brand }, { "Neighbors", "neighbors", c.accent },
         { "Routes", "routes", c.purple }, { "Links", "links", c.orange },
@@ -721,7 +775,7 @@ function Panels:tab_network(page, area)
         local y = area.y + row * halfH
         local w = col == 0 and halfW or (area.w - halfW - 1)
         local h = row == 0 and halfH or (area.h - halfH)
-        local rows = con:networkRows(q[2], srv)
+        local rows = (self.data.network or {})[q[2]] or {}
         local ix, iy, iw, ih = page:card(x, y, w, h, q[1], q[3], tostring(#rows))
         if ix then
             if #rows == 0 then
@@ -738,7 +792,7 @@ end
 
 function Panels:tab_bridges(page, area)
     local c = page.c
-    local st = self.con:snapshot().status or {}
+    local st = self.data.snap.status or {}
     local list = st.bridges or {}
     if #list == 0 then
         local ix, iy, iw, ih = page:card(area.x, area.y, area.w, area.h, "Bridges", c.accent)
@@ -896,7 +950,7 @@ function Panels:tab_drives(page, area)
             },
         }
     end
-    local storageInfo = self.con:snapshot().storage or {}
+    local storageInfo = self.data.snap.storage or {}
     local offline = 0
     for _, r in ipairs(storageInfo) do if r.present == false then offline = offline + 1 end end
     self:listCard(page, area, "Disk drives", c.orange, #rows .. " drives" .. (offline > 0 and (", " .. offline .. " storage offline") or ""), {
@@ -915,7 +969,7 @@ function Panels:tab_airlocks(page, area)
         return
     end
     local rows = {}
-    for _, r in ipairs(self.con:airlockRows() or {}) do
+    for _, r in ipairs(self.data.air or {}) do
         if r.header then
             local g = r.group
             rows[#rows + 1] = {
@@ -994,7 +1048,7 @@ end
 function Panels:defaultName(role)
     if role == "satellite" then return "" end
     local taken = {}
-    for _, d in ipairs(self.con:call(self.con.ctx.server, "devices") or {}) do taken[tostring(d.name)] = true end
+    for _, d in ipairs(self.data.devices or {}) do taken[tostring(d.name)] = true end
     local k = 1
     while taken[role .. k] do k = k + 1 end
     return role .. k
