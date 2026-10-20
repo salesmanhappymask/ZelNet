@@ -201,15 +201,16 @@ function Backbone:onHello(f, linkId, dist)
     local d = f.d
     if not frame.validHello(d) then return end
     local viaBridge = isBridgeLink(linkId)
-    if d.realm == self.realm then
-        if d.id ~= self.myId then self:warn("another server (#" .. tostring(d.id) .. ") uses realm " .. self.realm) end
-        return
-    end
+    if d.realm == self.realm and d.id == self.myId then return end
     if not util.normRealm(d.realm) or util.normRealm(d.realm) ~= d.realm then return end
     local origin = self:originOf(linkId, dist)
     if self:isBlocked(origin) then return end
     if not crypto.constEq(seal.helloMac(self.key, d), d.mac) then
         self:noteBad(origin)
+        return
+    end
+    if d.realm == self.realm then
+        self:warn("another server (#" .. tostring(d.id) .. ") uses realm " .. self.realm)
         return
     end
     if not viaBridge and d.id ~= f.f then return end
@@ -274,7 +275,7 @@ end
 function Backbone:onFrame(f, linkId, dist)
     if not self.enabled then return end
     local w = f.d
-    if not frame.validBackbone(w) or w.v ~= version.protocol then
+    if not frame.validBackbone(w) or w.v ~= version.protocol or w.ttl ~= w.ttl then
         self:count("dropped")
         return
     end

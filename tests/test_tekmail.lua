@@ -705,4 +705,177 @@ t.case("two realms over node loops: proxy login, mail both ways, global chat, ad
     t.ok(found, "target realm audits the remote admin action")
 end)
 
+t.case("federation guards: admin, proxy, rename and drop", run(function()
+    wipe()
+    local dir = newDir()
+    local r = mkRealm("MARS", dir)
+    account(r, "MARS:2", "bob")
+    account(r, "MARS:3", "cara")
+    c(r, "MARS:2", { op = "send", token = c(r, "MARS:2", { op = "login", user = "bob", pass = "secret" }).token, to = "cara", text = "hi" })
+    drain(r.n)
+    local function fed(src, body)
+        r.tm:onFed({ src = src, data = body, rq = true, id = util.newId(), port = "tekmail.fed" })
+        local out = drain(r.n)
+        for _, p in ipairs(out) do
+            if p.dst == src then return p.body end
+        end
+        return nil, out
+    end
+    t.eq(fed("VENUS", { op = "admin", actor = "eve", action = "reset_pw", target = "bob", value = "hack" }).err, "denied", "only main may send admin")
+    local ok = fed("EARTH", { op = "admin", actor = "boss", action = "reset_pw", target = "bob", value = "fromearth" })
+    t.ok(ok and ok.ok)
+    t.ok(c(r, "MARS:4", { op = "login", user = "bob", pass = "fromearth" }).ok)
+    t.eq(r.ctx.storage:auditTail(1)[1].actor, "boss@EARTH")
+    t.eq(fed("EARTH", { op = "admin", actor = "boss", action = "list" }).err, "bad_request")
+    dir.users.zara = "VENUS"
+    t.eq(fed("EARTH", { op = "admin", actor = "boss", action = "delete", target = "zara" }).err, "unknown_user", "no second hop")
+    local req = { op = "login", user = "bob", pass = "fromearth" }
+    t.eq(fed("EARTH", { op = "proxy", req = req, client = "EARTH:5", via = "VENUS" }).err, "denied", "via must match source")
+    t.eq(fed("EARTH", { op = "proxy", req = req, client = "VENUS:5", via = "EARTH" }).err, "denied", "client must be in the source realm")
+    t.eq(fed("EARTH", { op = "proxy", req = { op = "create", user = "x1x", pass = "abcd" }, client = "EARTH:5", via = "EARTH" }).err, "bad_request")
+    local pl = fed("EARTH", { op = "proxy", req = req, client = "EARTH:5", via = "EARTH" })
+    t.ok(pl.ok and pl.home == "MARS")
+    t.eq(c(r, "EARTH:5", { op = "whoami", token = pl.token }).err, "bad_token", "proxied token only works through its realm")
+    local who = fed("EARTH", { op = "proxy", req = { op = "whoami", token = pl.token }, client = "EARTH:5", via = "EARTH" })
+    t.eq(who.user, "bob")
+    dir.users.dan = "EARTH"
+    r.tm:onFed({ src = "EARTH", data = { op = "deliver", item = { id = "d1", from = "dan", fromRealm = "EARTH", to = "cara", text = "yo" } }, rq = true, id = util.newId(), port = "tekmail.fed" })
+    drain(r.n)
+    dir.users.dan = nil
+    dir.users.daniel = "EARTH"
+    fed("VENUS", { op = "renamed", old = "dan", new = "daniel" })
+    local tc = c(r, "MARS:3", { op = "login", user = "cara", pass = "secret" }).token
+    local peers = {}
+    for _, cv in ipairs(c(r, "MARS:3", { op = "inbox", token = tc }).convs) do peers[cv.peer] = true end
+    t.ok(not peers.daniel, "rename from a realm that does not own the name is ignored")
+    fed("EARTH", { op = "renamed", old = "dan", new = "daniel", display = "Daniel" })
+    peers = {}
+    for _, cv in ipairs(c(r, "MARS:3", { op = "inbox", token = tc }).convs) do peers[cv.peer] = cv end
+    t.ok(peers.daniel and not peers.dan, "peer renamed in local mailboxes")
+    t.eq(peers.daniel.display, "Daniel")
+    local th = c(r, "MARS:3", { op = "thread", token = tc, peer = "daniel" })
+    t.eq(th.messages[1].from, "daniel")
+    r.tm.proxies.tok1 = { token = "tok1", home = "EARTH", user = "dan", client = "MARS:7", last = 0 }
+    r.tm.proxies.tok2 = { token = "tok2", home = "VENUS", user = "zz", client = "MARS:8", last = 0 }
+    fed("EARTH", { op = "drop", tokens = { "tok1", "tok2" } })
+    t.eq(r.tm.proxies.tok1, nil)
+    t.ok(r.tm.proxies.tok2 ~= nil, "a realm can only drop its own tokens")
+    t.eq(fed("EARTH", { op = "bogus" }).err, "bad_request")
+end))
+
+t.case("create needs main for the name claim and rejects reserved names", run(function()
+    wipe()
+    local dir = newDir()
+    local r = mkRealm("MARS", dir)
+    dir.offline = true
+    local res = c(r, "MARS:2", { op = "create", user = "nora", pass = "abcd" })
+    t.eq(res.err, "offline")
+    t.eq(r.tm.accounts.nora, nil)
+    dir.offline = false
+    t.eq(c(r, "MARS:2", { op = "create", user = "global", pass = "abcd" }).err, "bad_name")
+    t.eq(c(r, "MARS:2", { op = "create", user = "Nora", pass = "abc" }).err, "weak_password")
+    local ok = c(r, "MARS:2", { op = "create", user = "Nora", pass = "abcd" })
+    t.ok(ok.ok)
+    t.eq(ok.user, "nora")
+    t.eq(ok.display, "Nora")
+    t.eq(ok.home, "MARS")
+    t.eq(dir.users.nora, "MARS")
+    t.eq(r.tm:handleClient("EARTH:2", { op = "create", user = "olga", pass = "abcd" }, "EARTH").err, "bad_request", "create through a proxy is refused")
+    drain(r.n)
+    r.tm:onClient({ src = "EARTH:2", data = { op = "hello" }, rq = true, id = util.newId(), port = "tekmail" })
+    local out = drain(r.n)
+    t.eq(out[1].body.err, "denied", "clients of another realm must use their own server")
+end))
+
+t.case("review: seen set stays bounded", function()
+    local set = util.newSeenSet(300, 10)
+    for i = 1, 5000 do set.check("k" .. i) end
+    t.ok(util.count(set.map) <= 11, "map size " .. util.count(set.map))
+    t.ok(set.check("k5000"), "recent ids are still known")
+    t.eq(set.check("k1"), false, "old ids were pruned")
+end)
+
+t.case("review: global chat cannot speak for users of other realms", run(function()
+    wipe()
+    local dir = newDir()
+    local r = mkRealm("MARS", dir)
+    dir.users.erin = "EARTH"
+    dir.users.vic = "VENUS"
+    local function chat(src, id, user, realm)
+        r.tm:onFed({ src = src, data = { op = "chat", room = "global", msg = { id = id, user = user, realm = realm, text = "x" } }, id = util.newId() })
+    end
+    chat("VENUS", "s2", "erin", "VENUS")
+    chat("VENUS", "s3", "ghost", "EARTH")
+    t.eq(#r.tm:chatHistory("global", 10), 0, "spoofed chat lines are dropped")
+    chat("EARTH", "ok1", "erin", "EARTH")
+    chat("EARTH", "ok2", "vic", "VENUS")
+    chat("VENUS", "ok3", "console", "VENUS")
+    chat("VENUS", "ok4", "erin", "EARTH")
+    local hist = r.tm:chatHistory("global", 10)
+    t.eq(#hist, 4, "own users, users relayed by an authority, and the console are accepted")
+end))
+
+t.case("review: delivery from a sender unknown to the directory is retried, not stored", run(function()
+    wipe()
+    local dir = newDir()
+    local r = mkRealm("MARS", dir)
+    local tb = account(r, "MARS:2", "bob")
+    drain(r.n)
+    local item = { id = "u1", from = "fake", fromRealm = "EARTH", to = "bob", text = "who am i" }
+    r.tm:onFed({ src = "EARTH", data = { op = "deliver", item = item }, rq = true, id = util.newId(), port = "tekmail.fed" })
+    local reply = drain(r.n)[1].body
+    t.eq(reply.ok, false)
+    t.eq(reply.err, "offline", "a retryable error, the outbox tries again later")
+    t.eq(#c(r, "MARS:2", { op = "inbox", token = tb }).convs, 0)
+    dir.users.fake = "EARTH"
+    r.tm:onFed({ src = "EARTH", data = { op = "deliver", item = item }, rq = true, id = util.newId(), port = "tekmail.fed" })
+    local ack
+    for _, pk in ipairs(drain(r.n)) do if pk.dst == "EARTH" then ack = pk.body end end
+    t.ok(ack and ack.ok)
+end))
+
+t.case("review: rename keeps the old mailbox when the copy fails", run(function()
+    wipe()
+    local dir = newDir()
+    local r = mkRealm("MARS", dir)
+    local ta = account(r, "MARS:1", "alice")
+    account(r, "MARS:2", "bob")
+    t.ok(c(r, "MARS:1", { op = "send", token = ta, to = "bob", text = "hello" }).ok)
+    local real = r.tm.swrite
+    r.tm.swrite = function(self, role, rel, value)
+        if role == "mail" and rel:sub(1, 6) == "alicia" then return nil, "disk full" end
+        return real(self, role, rel, value)
+    end
+    t.ok(r.tm:renameUser("alice", "alicia"))
+    r.tm.swrite = real
+    t.ok(r.ctx.storage:exists("mail", "alice/bob.db"), "old copy kept")
+end))
+
+t.case("review: stats count conversations without loading every index each time", run(function()
+    wipe()
+    local dir = newDir()
+    local r = mkRealm("MARS", dir)
+    local ta = account(r, "MARS:1", "alice")
+    account(r, "MARS:2", "bob")
+    account(r, "MARS:3", "carl")
+    c(r, "MARS:1", { op = "send", token = ta, to = "bob", text = "1" })
+    c(r, "MARS:1", { op = "send", token = ta, to = "carl", text = "2" })
+    r.tm.idx = {}
+    t.eq(r.tm:stats().conversations, 4)
+    local reads = 0
+    local real = r.tm.sread
+    r.tm.sread = function(...)
+        reads = reads + 1
+        return real(...)
+    end
+    r.tm.statsCache = nil
+    t.eq(r.tm:stats().conversations, 4)
+    t.eq(reads, 0, "counts are cached")
+    r.tm.sread = real
+    env.advance(1.5)
+    c(r, "MARS:2", { op = "send", token = c(r, "MARS:2", { op = "login", user = "bob", pass = "secret" }).token, to = "carl", text = "3" })
+    r.tm.statsCache = nil
+    t.eq(r.tm:stats().conversations, 6, "a new conversation is counted")
+end))
+
 t.finish()

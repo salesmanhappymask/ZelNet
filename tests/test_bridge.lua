@@ -721,4 +721,58 @@ t.case("bridges run as node tasks", function()
     w.clear()
 end)
 
+t.case("hostile long addresses in a batch file are refused", function()
+    local frames = { "x" }
+    local long = string.rep("A", 5000)
+    local text = codec.encode({ zb = 1, from = long, to = "EARTH", seq = 1, frames = frames, sum = crypto.adler32(codec.encode(frames)) })
+    local b, err = bridge.decodeBatch(text)
+    t.eq(b, nil)
+    t.eq(err, "bad address")
+    local packed = bridge.packBatch("MARS", long, 1, frames)
+    t.eq(select(2, bridge.decodeBatch(packed)), "bad address")
+end)
+
+t.case("a drive that vanishes during a pull is not taken as a sent floppy", function()
+    local w = standardWorld()
+    local earth = makeSide("EARTH", earthCfg({ sendDir = "north" }), "/earth/config")
+    local pulls = {}
+    env.setPeripheral("tesseract_0", { type = "cofh_thermalexpansion_tesseract", methods = {
+        pullItem = function(dir)
+            pulls[#pulls + 1] = dir
+            if dir == "south" then env.setPeripheral("drive_0", nil) end
+            return 0
+        end,
+        getFrequency = function() return 1 end,
+    } })
+    earth.b:enqueue(wire(1))
+    local did
+    env.run(function() did = earth.b:step() end, 60)
+    local st = earth.b:status()
+    t.eq(did, false)
+    t.eq(earth.bcfg.sendDir, "north", "a wrong direction was saved")
+    t.eq(st.corrections, 0)
+    t.eq(st.inflight, 0)
+    t.eq(st.queued, 1, "packet lost")
+    t.eq(st.state, "fault")
+    t.eq(pulls[1], "north")
+    t.eq(pulls[2], "south")
+    w.clear()
+end)
+
+t.case("probe ignores a drive that vanishes", function()
+    local w = standardWorld()
+    env.setPeripheral("tesseract_0", { type = "cofh_thermalexpansion_tesseract", methods = {
+        pullItem = function(dir)
+            if dir == "north" then env.setPeripheral("drive_0", nil) end
+            return 0
+        end,
+        getFrequency = function() return 1 end,
+    } })
+    local dir, err
+    env.run(function() dir, err = bridge.probe("tesseract_0", "drive_0", 0.1) end, 60)
+    t.eq(dir, nil)
+    t.ok(err ~= nil)
+    w.clear()
+end)
+
 t.finish()

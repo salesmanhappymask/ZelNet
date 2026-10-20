@@ -732,4 +732,112 @@ t.case("forged frames are cut off by sender position, not by the claimed sender 
     end)
 end)
 
+t.case("review: non canonical source spellings are refused as spoofed", function()
+    local srv, n = fresh()
+    local a = assert(srv:provision("client", "alice"))
+    kit.runAll({ n }, function()
+        hello(n, a, 42)
+        waitDown(1)
+        local before = srv.counters.spoofed
+        for _, src in ipairs({ "EARTH:042", "earth:42", "EARTH:0x2a", "EARTH:42.0" }) do
+            inject(n, (devFrame(n, a, 42, "EARTH", "zn.ps", { op = "sub", topic = "t" .. #src }, { src = src })))
+        end
+        sleep(2)
+        t.eq(srv.counters.spoofed, before + 4)
+        t.eq(util.count(srv.topics), 0, "subscription under a second spelling")
+    end)
+end)
+
+t.case("review: devices cannot flood reserved ports or send updates and hellos to devices", function()
+    local srv, n = fresh()
+    local a = assert(srv:provision("client", "alice"))
+    local b = assert(srv:provision("client", "bob"))
+    local floods = {}
+    srv.bb.flood = function(_, pkt)
+        floods[#floods + 1] = pkt.port
+        return true, 0
+    end
+    kit.runAll({ n }, function()
+        hello(n, a, 42)
+        hello(n, b, 43)
+        waitDown(2)
+        kit.clearTx("top")
+        inject(n, (devFrame(n, a, 42, "*", "zn.dir", { op = "push", realms = {}, users = {} })))
+        inject(n, (devFrame(n, a, 42, "*", "zn.update", { op = "offer" })))
+        inject(n, (devFrame(n, a, 42, "*", "chat", "hi")))
+        inject(n, (devFrame(n, a, 42, "EARTH:43", "zn.update", { op = "offer", version = "9" })))
+        inject(n, (devFrame(n, a, 42, "EARTH:43", "zn.hello", { ok = true }, { re = "0123456789abcdef" })))
+        sleep(2)
+        t.eq(#floods, 1)
+        t.eq(floods[1], "chat")
+        t.eq(#downFrames(), 0, "reserved port relayed between devices")
+    end)
+end)
+
+t.case("review: unknown device names do not grow the note table and bad beacons block", function()
+    local srv, n = fresh()
+    kit.runAll({ n }, function()
+        local base = util.count(srv.noted)
+        for i = 1, 40 do
+            local d = { realm = "EARTH", root = 900 + i, seq = 5, hops = 0, ver = 1, mac = string.rep("0", 64) }
+            inject(n, frame.make(n.cfg.netId, "b", 900 + i, nil, d), "modem:top", 17)
+            local f = devFrame(n, { deviceKey = crypto.newKey(), name = "ghost" .. i }, 50 + i, "EARTH", "sink", 1)
+            inject(n, f, "modem:top", 3)
+        end
+        sleep(3)
+        t.ok(util.count(srv.noted) <= base + 1, "noted grew per unknown name")
+        t.ok(srv:isBlocked(kit.server.originKey("modem:top", 17)), "bad beacon position not blocked")
+        for _, w in ipairs(srv:status().warnings) do t.ok(not w:find("also serves", 1, true), w) end
+    end)
+end)
+
+t.case("review: NaN ttl frames are dropped", function()
+    local srv, n = fresh()
+    local a = assert(srv:provision("client", "alice"))
+    kit.runAll({ n }, function()
+        hello(n, a, 42)
+        waitDown(1)
+        kit.clearTx("top")
+        local f = devFrame(n, a, 42, "EARTH", "zn.ping", { t = 1 }, { rq = true })
+        f.d.ttl = 0 / 0
+        inject(n, f)
+        local bk = n.cfg.backboneKey
+        local w = assert(seal.sealBackbone(need("cipher").software(bk), bk, { v = 1, id = util.newId(), src = "MARS", dst = "VENUS", port = "x", ttl = 24, body = 1 }, "MARS"))
+        w.ttl = 0 / 0
+        local dropped = srv.bb.counters.dropped
+        inject(n, frame.make(n.cfg.netId, "x", 2, 1, w))
+        sleep(2)
+        t.eq(#downFrames(), 0, "NaN ttl answered")
+        t.eq(srv.bb.counters.dropped, dropped + 1)
+    end)
+end)
+
+t.case("review: an unauthenticated hello for this realm raises no warning", function()
+    local srv, n = fresh()
+    local warnings = {}
+    srv:on("warning", function(text) warnings[#warnings + 1] = text end)
+    kit.runAll({ n }, function()
+        for i = 1, 30 do
+            local d = { realm = "EARTH", id = 500 + i, main = false, ver = 1, prog = "1", seq = i, fp = srv.bb.fp, mac = string.rep("0", 64) }
+            inject(n, frame.make(n.cfg.netId, "h", 500 + i, nil, d), "modem:top", 9)
+        end
+        sleep(2)
+        t.eq(#warnings, 0, "forged hello raised a warning")
+        local d = { realm = "EARTH", id = 7, main = false, ver = 1, prog = "1", seq = 1, fp = srv.bb.fp }
+        d.mac = seal.helloMac(n.cfg.backboneKey, d)
+        inject(n, frame.make(n.cfg.netId, "h", 7, nil, d), "modem:top", 4)
+        sleep(2)
+        t.eq(#warnings, 1)
+        t.ok(warnings[1] and warnings[1]:find("#7", 1, true))
+    end)
+end)
+
+t.case("review: the link neighbor table stays bounded under forged sender ids", function()
+    local srv, n = fresh()
+    for i = 1, 5000 do n.links:learn(100000 + i, "modem:top", 3) end
+    t.ok(util.count(n.links.neighbors) <= 1024 + 1, "neighbor table grew without bound")
+    n.links:learn(7, "modem:top", 3)
+    t.ok(n.links.neighbors[7] ~= nil)
+end)
+
 t.finish()

@@ -295,4 +295,22 @@ t.case("audit flush is deferred through node timers when a node runs", function(
     t.ok(fs.exists("/.zelnet/data/audit/log.db"))
 end)
 
+t.case("review: audit entries kept while the audit disk was out are written when it returns", function()
+    clean()
+    local d = drive("drive_1", "disk", {})
+    local ctx = newCtx({ dataKey = crypto.newKey(), drives = { audit = "drive_1" } })
+    local st = storage.new(ctx)
+    st:init()
+    d.disk = false
+    st:onDiskEvent("disk_eject", "drive_1")
+    st:audit("a", "while_out", nil, nil, true)
+    d.disk = true
+    st:onDiskEvent("disk", "drive_1")
+    local st2 = storage.new(ctx)
+    st2:init()
+    local tail = st2:auditTail(5)
+    t.eq(#tail, 1)
+    t.eq(tail[1] and tail[1].action, "while_out")
+end)
+
 t.finish()

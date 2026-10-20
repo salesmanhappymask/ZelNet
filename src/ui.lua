@@ -495,7 +495,7 @@ function M.menu(surf, opts)
                 sel = sel < #items and sel + 1 or 1
             elseif a == keys.enter then
                 action = "item:" .. sel
-            elseif a == keys.backspace and opts.back ~= false then
+            elseif (a == keys.backspace or isCtrlKey(a)) and opts.back ~= false then
                 action = "back"
             end
         elseif ev == "char" then
@@ -560,7 +560,7 @@ function M.message(surf, title, lines, opts)
                 return true
             end
         elseif ev == "key" then
-            if a == keys.enter or a == keys.backspace then return true end
+            if a == keys.enter or a == keys.backspace or isCtrlKey(a) then return true end
             if a == keys.down then offset = offset + 1 end
             if a == keys.up then offset = math.max(0, offset - 1) end
         end
@@ -585,7 +585,7 @@ function M.confirm(surf, title, text, opts)
             if act == "no" then return false end
         elseif ev == "key" then
             if a == keys.enter then return true end
-            if a == keys.backspace then return false end
+            if a == keys.backspace or isCtrlKey(a) then return false end
         elseif ev == "char" then
             if a == "y" or a == "Y" then return true end
             if a == "n" or a == "N" then return false end

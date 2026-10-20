@@ -310,4 +310,38 @@ t.case("disabled by config", function()
     t.eq(al:discover(), false)
 end)
 
+t.case("review: a report before storage is ready keeps the stored lock, override and name", function()
+    resetNet()
+    local st = memStorage()
+    local a1 = mk(st)
+    a1:start()
+    a1:handleMessage(21, { type = "alk_status", name = "Door-A", oxygenated = true })
+    a1:rename(21, "Hatch-A")
+    a1:setLocked(21, true)
+    a1:handleMessage(22, { type = "alk_status", name = "Bay-B", oxygenated = true })
+    a1:setManual(22, "seal")
+    st.isReady = false
+    resetNet()
+    local a2 = mk(st)
+    a2:start()
+    a2:handleMessage(21, { type = "alk_status", name = "Door-A", oxygenated = true })
+    a2:handleMessage(22, { type = "alk_status", name = "Bay-B", oxygenated = true })
+    st.isReady = true
+    a2:tick()
+    local r21, r22
+    for _, r in ipairs(a2:list()) do
+        if r.id == 21 then r21 = r end
+        if r.id == 22 then r22 = r end
+    end
+    t.eq(r21.name, "Hatch-A")
+    t.eq(r21.locked, true)
+    t.eq(r21.sealed, true)
+    t.eq(r22.manual, "seal")
+    t.eq(r22.sealed, true)
+    local cmds = sentTo(21, "alk_cmd")
+    t.ok(#cmds >= 1 and cmds[#cmds].action == "seal" and cmds[#cmds].locked == true, "the lock is sent again")
+    a2:save()
+    t.eq(st.data["system/airlocks.db"].nodes["21"].locked, true)
+end)
+
 t.finish()

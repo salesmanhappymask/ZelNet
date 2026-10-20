@@ -132,7 +132,10 @@ function Airlock:load()
     if type(t) == "table" and type(t.nodes) == "table" then
         for key, r in pairs(t.nodes) do
             local id = type(r) == "table" and tonumber(r.id)
-            if id and tostring(id) == key and not self.nodes[key] then
+            local live = id and tostring(id) == key and self.nodes[key]
+            if live then
+                self:mergeStored(live, r)
+            elseif id and tostring(id) == key then
                 local rec = {
                     id = id, name = cleanName(r.name) ~= "" and cleanName(r.name) or ("Airlock " .. key),
                     role = r.role, oxygenated = r.oxygenated, locked = r.locked == true or nil,
@@ -148,6 +151,20 @@ function Airlock:load()
     end
     self.loaded = true
     return true
+end
+
+function Airlock:mergeStored(live, r)
+    if r.locked == true and not live.locked then live.locked = true end
+    if not live.manual and (r.manual == "seal" or r.manual == "unseal") then live.manual = r.manual end
+    if r.named == true and not live.named and cleanName(r.name) ~= "" then
+        live.name = cleanName(r.name)
+        live.named = true
+        live.role = nil
+    end
+    M.normalize(live)
+    self:applyPolicy(live, true)
+    self:applyGroup(live.group)
+    self:changed(live, true)
 end
 
 function Airlock:snapshot()
@@ -231,6 +248,7 @@ function Airlock:handleMessage(senderID, msg)
     end
     local id = tonumber(senderID)
     if not id then return false end
+    if not self.loaded then self:load() end
     local key = tostring(id)
     local rec = self.nodes[key]
     local isNew = rec == nil

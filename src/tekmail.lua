@@ -179,6 +179,7 @@ function M.new(ctx)
     self.roomDirty = {}
     self.roomSavePending = false
     self.idx = {}
+    self.convCounts = {}
     self.locks = {}
     self.fails = {}
     self.creates = {}
@@ -724,6 +725,7 @@ function TekMail:appendLocked(owner, peer, m, opts)
         return nil, "storage"
     end
     idx.n = idx.n + 1
+    if not idx.peers[peer] then self.convCounts[owner] = nil end
     local e = self:refreshEntry(idx, peer, conv, opts.display)
     e.n = idx.n
     if not rec.read then e.unread = (e.unread or 0) + 1 end
@@ -1285,6 +1287,7 @@ function TekMail:doDelete(user)
     if res == nil then return nil, merr end
     self:locked("mail:" .. user, function() self:sdelete("mail", user) end)
     self.idx[user] = nil
+    self.convCounts[user] = nil
     self:dropSessions(user)
     self.log.info("tekmail account deleted: " .. user)
     return true
@@ -1344,6 +1347,7 @@ function TekMail:moveMailbox(old, new)
     if second < first then first, second = second, first end
     self:locked("mail:" .. first, function()
         self:locked("mail:" .. second, function()
+            local copied = true
             for _, name in ipairs(self:slist("mail", old)) do
                 if name:sub(-3) == ".db" then
                     local v = self:sread("mail", old .. "/" .. name, nil)
@@ -1354,23 +1358,35 @@ function TekMail:moveMailbox(old, new)
                                 if e.lastFrom == old then e.lastFrom = new end
                             end
                         end
-                        self:swrite("mail", new .. "/" .. name, v)
+                        if not self:swrite("mail", new .. "/" .. name, v) then copied = false end
+                    elseif self:sexists("mail", old .. "/" .. name) then
+                        copied = false
                     end
                 end
             end
-            self:sdelete("mail", old)
+            if copied then
+                self:sdelete("mail", old)
+            else
+                self.log.error("tekmail: mailbox of " .. old .. " could not be fully moved to " .. new .. "; the old copy is kept")
+            end
             self.idx[old] = nil
             self.idx[new] = nil
+            self.convCounts[old] = nil
+            self.convCounts[new] = nil
         end)
     end)
 end
 
 function TekMail:renamePeer(old, new, display)
-    for _, user in ipairs(util.sortedKeys(self.accounts)) do
+    for i, user in ipairs(util.sortedKeys(self.accounts)) do
+        if i % 8 == 0 then compat.yieldNow() end
         if user ~= new then
-            local idx = self:loadIndex(user)
-            if idx and idx.peers[old] then
+            local probe = self:loadIndex(user)
+            if probe and probe.peers[old] then
                 self:locked("mail:" .. user, function()
+                    local idx = self:loadIndex(user)
+                    if not idx or not idx.peers[old] then return end
+                    self.convCounts[user] = nil
                     local conv = self:sread("mail", convRel(user, old), nil)
                     if type(conv) == "table" then
                         renameIn(conv, old, new)
@@ -1461,6 +1477,7 @@ function TekMail:fedDeliver(srcRealm, b)
     if item.fromRealm ~= srcRealm then return fail("denied") end
     local claimed = self:dirHome(item.from)
     if claimed and claimed ~= srcRealm then return fail("denied") end
+    if not claimed then return fail("offline", "The sender is not in the directory of " .. self.realm .. " yet.") end
     local ok, err = self:deliverLocal(item)
     if not ok then return fail(err == "unknown_user" and err or "storage") end
     return { ok = true, dup = err == "dup" or nil }
@@ -1473,6 +1490,9 @@ function TekMail:fedChat(srcRealm, b)
     local user, realm = M.normUser(m.user), util.normRealm(m.realm)
     local text = M.cleanText(m.text, M.CHAT_MAX, true)
     if not user or not realm or not text then return nil end
+    local home = self:dirHome(user)
+    if home and home ~= realm then return nil end
+    if realm ~= srcRealm and home ~= realm then return nil end
     if self.chatSeen.check(m.id) then return nil end
     self:postChat("global", user, realm, text, m.id)
     return nil
@@ -1685,10 +1705,26 @@ function TekMail:sessions()
 end
 
 function TekMail:conversationCount()
-    local n = 0
+    local n, reads = 0, 0
     for _, user in ipairs(util.sortedKeys(self.accounts)) do
-        local idx = self:loadIndex(user)
-        if idx then n = n + util.count(idx.peers) end
+        local c = self.convCounts[user]
+        if not c then
+            local idx = self.idx[user]
+            if not idx then
+                reads = reads + 1
+                if reads % 8 == 0 then compat.yieldNow() end
+                local t = self:sread("mail", indexRel(user), nil)
+                idx = type(t) == "table" and type(t.peers) == "table" and t or nil
+            end
+            if idx then
+                c = util.count(idx.peers)
+                self.convCounts[user] = c
+            end
+        end
+        n = n + (c or 0)
+    end
+    for user in pairs(self.convCounts) do
+        if not self.accounts[user] then self.convCounts[user] = nil end
     end
     return n
 end

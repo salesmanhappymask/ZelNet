@@ -205,7 +205,7 @@ function Storage:recheck(role)
         else
             self.log.info("storage: " .. role .. " online on " .. tostring(r.drive or "local"))
             if self.ctx.emit then pcall(self.ctx.emit, "storage_online", role) end
-            if role == "audit" then self:loadAudit() end
+            if role == "audit" and self:loadAudit() and self.auditDirty then self:flushAudit() end
         end
     end
     return r

@@ -25,6 +25,7 @@ M.NO_DISK_GRACE = 30
 M.SWEEP_EVERY = 15
 M.BACKOFF_MAX = 30
 M.SEEN_TTL = 1800
+M.ADDR_MAX = 32
 
 local VALID_DIR = {}
 for _, d in ipairs(M.DIRECTIONS) do VALID_DIR[d] = true end
@@ -68,6 +69,10 @@ end
 
 function M.diskIn(drive)
     return call(drive, "isDiskPresent") == true
+end
+
+function M.diskGone(drive)
+    return peripheral.isPresent(drive) and call(drive, "isDiskPresent") == false
 end
 
 function M.mountOf(drive)
@@ -120,6 +125,7 @@ function M.decodeBatch(text)
     end
     if head.zb ~= M.FORMAT then return nil, "unknown format" end
     if type(head.from) ~= "string" or type(head.to) ~= "string" then return nil, "missing address" end
+    if #head.from > M.ADDR_MAX or #head.to > M.ADDR_MAX then return nil, "bad address" end
     if type(head.sum) ~= "number" or crypto.adler32(framesText) ~= head.sum then return nil, "checksum mismatch" end
     local frames = codec.decode(framesText)
     if type(frames) ~= "table" then return nil, "unreadable frames" end
@@ -158,12 +164,16 @@ function M.probe(tessName, driveName, settle)
     if not methodSet(tessName).pullItem then return nil, tessName .. " has no pullItem (is OpenPeripheral installed?)" end
     if type(driveName) ~= "string" or peripheral.getType(driveName) ~= "drive" then return nil, "drive not found" end
     if not M.diskIn(driveName) then return nil, "put a floppy in " .. driveName .. " first" end
+    local prev
     for _, dir in ipairs(M.DIRECTIONS) do
-        rethrow(pcall(peripheral.call, tessName, "pullItem", dir, 1, 1))
-        if not M.diskIn(driveName) then return dir end
-        sleep(settle + 0.1)
-        if not M.diskIn(driveName) then return dir end
+        if prev and M.diskGone(driveName) then return prev end
+        local ok = rethrow(pcall(peripheral.call, tessName, "pullItem", dir, 1, 1))
+        if M.diskGone(driveName) then return dir end
+        prev = ok and dir or nil
+        if ok then sleep(settle + 0.1) end
+        if ok and M.diskGone(driveName) then return dir end
     end
+    if prev and M.diskGone(driveName) then return prev end
     return nil, "the floppy did not leave " .. driveName .. "; check that " .. tessName .. " touches the drive, is linked to the other side, and that the drive on the other side is empty"
 end
 
@@ -410,10 +420,10 @@ end
 
 function Bridge:tryPull(tess, drive, dir)
     local ok, moved = rethrow(pcall(peripheral.call, tess, "pullItem", dir, 1, 1))
-    if not M.diskIn(drive) then return true end
-    if not ok then return false end
+    if M.diskGone(drive) then return true end
+    if not ok then return false, true end
     sleep(self.settle)
-    if not M.diskIn(drive) then return true end
+    if M.diskGone(drive) then return true end
     if (tonumber(moved) or 0) > 0 then
         self.badDirs[tess] = self.badDirs[tess] or {}
         self.badDirs[tess][dir] = true
@@ -440,13 +450,25 @@ function Bridge:eject(tess, drive, dirKey, full)
         if dir then add(M.OPPOSITE[dir]) end
         for _, d in ipairs(M.DIRECTIONS) do add(d) end
     end
+    local prev, hit
     for _, d in ipairs(order) do
-        if self:tryPull(tess, drive, d) then
-            self.confirmed[dirKey] = true
-            self.streak[dirKey] = 0
-            if d ~= dir then self:saveDir(dirKey, d) end
-            return true
+        if prev and M.diskGone(drive) then
+            hit = prev
+            break
         end
+        local moved, failed = self:tryPull(tess, drive, d)
+        if moved then
+            hit = d
+            break
+        end
+        prev = not failed and d or nil
+    end
+    if not hit and prev and M.diskGone(drive) then hit = prev end
+    if hit then
+        self.confirmed[dirKey] = true
+        self.streak[dirKey] = 0
+        if hit ~= dir then self:saveDir(dirKey, hit) end
+        return true
     end
     self.streak[dirKey] = self.streak[dirKey] + 1
     if #order == 0 then return false, "floppy did not leave " .. drive .. " (no direction left to try)" end
@@ -466,7 +488,10 @@ function Bridge:saveDir(dirKey, dir)
                 found = true
             end
         end
-        if found then saved, err = config.save(root, self.ctx.configPath) end
+        if found then
+            local ok, a, b = pcall(config.save, root, self.ctx.configPath)
+            if ok then saved, err = a, b else saved, err = false, a end
+        end
     end
     local text = LABELS[dirKey] .. " corrected from " .. tostring(old) .. " to " .. dir
     if not found then

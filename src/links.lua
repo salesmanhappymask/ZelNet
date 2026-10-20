@@ -166,10 +166,30 @@ function LinkSet:sendTo(cid, f)
     return self:broadcast(f)
 end
 
+M.MAX_NEIGHBORS = 256
+
+function LinkSet:pruneNeighbors(now)
+    local n = 0
+    for cid, nb in pairs(self.neighbors) do
+        if now - nb.t > 120 then
+            self.neighbors[cid] = nil
+        else
+            n = n + 1
+        end
+    end
+    if n > M.MAX_NEIGHBORS * 4 then
+        self.neighbors = {}
+        n = 0
+    end
+    self.nbCount = n
+end
+
 function LinkSet:learn(cid, linkId, dist)
     local nb = self.neighbors[cid]
     local now = compat.now()
     if not nb then
+        self.nbCount = (self.nbCount or 0) + 1
+        if self.nbCount > M.MAX_NEIGHBORS then self:pruneNeighbors(now) end
         nb = { link = linkId, t = now, dist = dist }
         self.neighbors[cid] = nb
         return nb
@@ -186,6 +206,7 @@ function LinkSet:learn(cid, linkId, dist)
 end
 
 function LinkSet:forget(cid)
+    if self.neighbors[cid] then self.nbCount = math.max((self.nbCount or 1) - 1, 0) end
     self.neighbors[cid] = nil
 end
 

@@ -306,21 +306,22 @@ function M.newLogger(size)
 end
 
 function M.newSeenSet(ttl, maxSize)
-    local set = { ttl = ttl or 300, max = maxSize or 2000, map = {}, order = {}, head = 1 }
+    local set = { ttl = ttl or 300, max = maxSize or 2000, map = {}, order = {}, head = 1, tail = 0 }
     function set.prune()
         local now = compat.now()
-        while set.head <= #set.order do
+        while set.head <= set.tail do
             local item = set.order[set.head]
-            if now - item.t <= set.ttl and (#set.order - set.head + 1) <= set.max then break end
+            if now - item.t <= set.ttl and (set.tail - set.head + 1) <= set.max then break end
             if set.map[item.k] == item.t then set.map[item.k] = nil end
             set.order[set.head] = nil
             set.head = set.head + 1
         end
-        if set.head > 512 and set.head > #set.order / 2 then
+        if set.head > 512 and set.head > set.tail / 2 then
             local fresh = {}
-            for i = set.head, #set.order do fresh[#fresh + 1] = set.order[i] end
+            for i = set.head, set.tail do fresh[#fresh + 1] = set.order[i] end
             set.order = fresh
             set.head = 1
+            set.tail = #fresh
         end
     end
     function set.check(k)
@@ -328,7 +329,8 @@ function M.newSeenSet(ttl, maxSize)
         if set.map[k] then return true end
         local now = compat.now()
         set.map[k] = now
-        set.order[#set.order + 1] = { k = k, t = now }
+        set.tail = set.tail + 1
+        set.order[set.tail] = { k = k, t = now }
         return false
     end
     function set.has(k)

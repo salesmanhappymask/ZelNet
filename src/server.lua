@@ -34,7 +34,7 @@ M.UPDATE_PATH = "/zelnet.new"
 local Server = {}
 Server.__index = Server
 
-local SERVER_ONLY_PORTS = { ["zn.ps"] = true, ["zn.err"] = true }
+local SERVER_ONLY_PORTS = { ["zn.ps"] = true, ["zn.err"] = true, ["zn.hello"] = true, ["zn.update"] = true }
 
 function M.updateAad(ver, size, sha)
     return "zn.update|" .. tostring(ver) .. "|" .. tostring(size) .. "|" .. tostring(sha)
@@ -122,7 +122,7 @@ function Server:start()
     self.reg:load()
     self.dir:load()
     n:onFrame("p", function(_, f, linkId, dist) self:onAccessFrame(f, linkId, dist) end)
-    n:onFrame("b", function(_, f, linkId) self:onBeaconFrame(f, linkId) end)
+    n:onFrame("b", function(_, f, linkId, dist) self:onBeaconFrame(f, linkId, dist) end)
     n:setRouter(function(pkt) self:routePacket(pkt, "local") end)
     n:listen("zn.hello", function(msg) self:onHelloMsg(msg) end)
     n:listen("zn.name", function(msg) self:onNameMsg(msg) end)
@@ -159,13 +159,17 @@ function Server:sendBeacon()
     self:count("beacons")
 end
 
-function Server:onBeaconFrame(f)
+function Server:onBeaconFrame(f, linkId, dist)
     local d = f.d
     if not frame.validBeacon(d) or d.realm ~= self.realm or d.root == self.myId then return end
     if self.noted["beacon:" .. tostring(d.root)] then return end
+    local origin = M.originKey(linkId, dist)
+    if self:isBlocked(origin) then return end
     if crypto.constEq(seal.beaconMac(self.cfg.realmKey, d), d.mac) then
         self.noted["beacon:" .. tostring(d.root)] = compat.now()
         self:warn("computer " .. tostring(d.root) .. " also serves realm " .. self.realm)
+    else
+        self:noteBad(origin)
     end
 end
 
@@ -216,7 +220,7 @@ function Server:onAccessFrame(f, linkId, dist)
         self:count("accessBad")
         return
     end
-    if w.dir ~= "u" or f.t ~= self.myId or w.ttl <= 0 then return end
+    if w.dir ~= "u" or f.t ~= self.myId or w.ttl ~= w.ttl or w.ttl <= 0 then return end
     local origin = M.originKey(linkId, dist)
     if self:isBlocked(origin) then
         self:count("blocked")
@@ -226,7 +230,7 @@ function Server:onAccessFrame(f, linkId, dist)
     local dev = self.reg:get(w.dev)
     if not dev then
         self:count("unknownDevice")
-        self:noteOnce("unknown:" .. tostring(w.dev), "packet from unknown device " .. util.sanitize(w.dev))
+        self:noteOnce("unknown", "packet from unknown device " .. util.sanitize(w.dev))
         return
     end
     if dev.status == "revoked" then
@@ -246,7 +250,7 @@ function Server:onAccessFrame(f, linkId, dist)
         return
     end
     local a = util.parseAddress(pkt.src)
-    if not a or a.realm ~= self.realm or not a.id then
+    if not a or a.realm ~= self.realm or not a.id or pkt.src ~= self.realm .. ":" .. a.id then
         self:count("spoofed")
         return
     end
@@ -293,9 +297,15 @@ function Server:routePacket(pkt, origin, dev)
     if type(pkt) ~= "table" or pkt.v ~= version.protocol then return end
     if type(pkt.dst) ~= "string" or type(pkt.src) ~= "string" or type(pkt.id) ~= "string" then return end
     if pkt.dst == "*" then
+        if origin == "device" and pkt.port:sub(1, 3) == "zn." then
+            self:count("dropped")
+            return
+        end
         if origin == "local" or origin == "device" then
             local ok, err = self.bb:flood(pkt)
-            if not ok and err == "too_large" then self:errorFor(pkt, "too_large", "packet too large for the backbone") end
+            if not ok and err == "too_large" then
+                self:errorFor({ id = pkt.id, src = pkt.src, dst = self.realm, port = pkt.port }, "too_large", "packet too large for the backbone")
+            end
         end
         if origin == "device" or origin == "flood" then self:deliverLocal(pkt, origin) end
         return
