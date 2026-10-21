@@ -140,7 +140,7 @@ end
 
 M.NOISE = {
     modem_message = true, bitnet_message = true, rednet_message = true, task_complete = true,
-    zn_work = true, zn_spawn = true, zn_breathe = true, zn_clock = true, zn_reply = true, zn_msg = true, zn_unpack = true, zn_install = true,
+    zn_work = true, zn_spawn = true, zn_breathe = true, zn_clock = true, zn_gw = true, zn_reply = true, zn_msg = true, zn_unpack = true, zn_install = true,
 }
 M.QUIET_KEEP = 64
 

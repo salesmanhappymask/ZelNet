@@ -13,6 +13,7 @@ Built for Minecraft 1.6.4 with ComputerCraft 1.63, MoarPeripherals 1.5, Computro
 * **Links that fit your build.** Wireless and wired modems for short range, BitNet towers (3000 blocks) and mini antennas (650 blocks) for long range, and tesseract disk bridges between dimensions, built into each server.
 * **TekMail** with private messages across dimensions, a global chatroom and a local one per dimension, an account directory and admin tools.
 * **A carrier for any program**: send packets, make requests, and publish or subscribe to topics across every dimension. See [docs/PROTOCOL.md](docs/PROTOCOL.md).
+* **A public gateway for plain rednet.** Computers that do not run ZelNet can send messages and share topics across every dimension with ordinary `rednet`, through any ZelNet server or router in range. See [docs/PUBLIC.md](docs/PUBLIC.md).
 
 ## Hardware
 

@@ -9,6 +9,7 @@ frame
 seal
 links
 node
+gateway
 api
 ui
 storage

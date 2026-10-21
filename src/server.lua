@@ -9,6 +9,7 @@ local version = need("version")
 local registry = need("registry")
 local directory = need("directory")
 local backbone = need("backbone")
+local gateway = need("gateway")
 
 local M = {}
 
@@ -22,6 +23,9 @@ M.SUB_TTL = 600
 M.MAX_SUBS_PER_NODE = 64
 M.MAX_TOPICS = 500
 M.PUB_MIN_GAP = 0.9
+M.PUB_SUB_TTL = 86400
+M.PLAIN_TTL = 21600
+M.MAX_PLAIN = 1000
 M.UPDATE_CHUNK = 6000
 M.UPDATE_REBOOT_DELAY = 600
 M.MAX_WARNINGS = 20
@@ -60,6 +64,7 @@ function M.new(ctx)
     self.badRate = {}
     self.topics = {}
     self.pubTimes = {}
+    self.plain = {}
     self.localNames = {}
     self.warnings = {}
     self.noted = {}
@@ -132,6 +137,18 @@ function Server:start()
     n:listen("zn.route", function() end)
     n:listen("zn.admin", function(msg) self:onAdminMsg(msg) end)
     n:listen("zn.update", function(msg) self:onUpdateMsg(msg) end)
+    n:listen(gateway.CONTROL, function(msg) self:onPubMsg(msg) end)
+    self.gateway = gateway.new(n, {
+        log = self.log,
+        isOff = function() return self.cfg.publicGateway == false end,
+        backend = {
+            seen = function(cid) self:notePlain(cid, "self") end,
+            blocked = function(cid) return self:pubBlocked(cid) end,
+            connected = function() return true end,
+            op = function(b) self:pubOp(b) end,
+        },
+    })
+    self.gateway:start()
     n.localSubscribe = function(topic) self:subscribe(self.realm, topic, math.huge) end
     n.localUnsubscribe = function(topic) self:unsubscribe(self.realm, topic) end
     self.bb:start()
@@ -331,6 +348,7 @@ function Server:routePacket(pkt, origin, dev)
     end
     local target = self:findDevice(a)
     if not target then
+        if a.id and self:deliverPlain(a.id, pkt) then return end
         self:errorFor(pkt, "unknown_node", "no node " .. pkt.dst)
         return
     end
@@ -604,6 +622,82 @@ function Server:onPsMsg(msg)
     if msg.rq and reply then self.node:reply(msg, reply) end
 end
 
+function Server:pubBlocked(cid)
+    local list = self.cfg.publicBlock
+    if type(list) ~= "table" then return false end
+    for _, id in ipairs(list) do
+        if tonumber(id) == tonumber(cid) then return true end
+    end
+    return false
+end
+
+function Server:notePlain(cid, via)
+    cid = tonumber(cid)
+    if not cid then return end
+    if not self.plain[cid] and util.count(self.plain) >= M.MAX_PLAIN then
+        local oldest, oldT
+        for k, v in pairs(self.plain) do
+            if not oldT or v.t < oldT then oldest, oldT = k, v.t end
+        end
+        if oldest then self.plain[oldest] = nil end
+    end
+    self.plain[cid] = { via = via, t = compat.now() }
+end
+
+function Server:plainFrom(from)
+    local a = util.parseAddress(from)
+    if not a or a.realm ~= self.realm or not a.id then return nil end
+    if self:pubBlocked(a.id) then return nil end
+    return a.realm .. ":" .. a.id
+end
+
+function Server:pubOp(b)
+    if type(b) ~= "table" then return end
+    local from = self:plainFrom(b.from)
+    if not from then return end
+    if b.op == "send" then
+        local to = util.normAddress(b.to)
+        if to then self.node:send(to, gateway.PORT, b.data, { src = from }) end
+    elseif b.op == "publish" and gateway.stripTopic(b.topic) then
+        self:publish(from, b.topic, b.data, b.retain)
+    elseif b.op == "subscribe" and gateway.stripTopic(b.topic) then
+        self:subscribe(from, b.topic, M.PUB_SUB_TTL)
+    elseif b.op == "unsubscribe" and gateway.stripTopic(b.topic) then
+        self:unsubscribe(from, b.topic)
+    end
+end
+
+function Server:onPubMsg(msg)
+    local dev = self:deviceFromSrc(msg.src)
+    if not dev or dev.role ~= "router" or type(msg.data) ~= "table" then return end
+    if self.cfg.publicGateway == false then return end
+    local b = msg.data
+    if b.op == "seen" then
+        local cid = tonumber(b.cid)
+        if cid and not self:pubBlocked(cid) then self:notePlain(cid, msg.src) end
+        return
+    end
+    self:pubOp(b)
+end
+
+function Server:deliverPlain(cid, pkt)
+    if self.cfg.publicGateway == false or not self.gateway then return false end
+    if pkt.port ~= gateway.PORT and pkt.port ~= "zn.ps" and pkt.port ~= "zn.err" then return false end
+    if self:pubBlocked(cid) then return true end
+    local msg = gateway.toPlain(pkt, self:isServerAddress(pkt.src))
+    if not msg then
+        self:count("dropped")
+        return true
+    end
+    local lease = self.plain[cid]
+    if lease and lease.via ~= "self" then
+        self.node:send(lease.via, gateway.CONTROL, { op = "deliver", cid = cid, msg = msg })
+    else
+        self.gateway:transmit(cid, msg)
+    end
+    return true
+end
+
 function Server:isServerAddress(src)
     local a = util.parseAddress(src)
     return a ~= nil and a.id == nil and a.name == nil and a.realm ~= "*"
@@ -792,6 +886,9 @@ function Server:housekeeping()
     end
     for cid, r in compat.spairs(self.down) do
         if now - r.t > M.DOWN_ROUTE_TTL then self.down[cid] = nil end
+    end
+    for cid, r in compat.spairs(self.plain) do
+        if now - r.t > M.PLAIN_TTL then self.plain[cid] = nil end
     end
     for _, tbl in ipairs({ self.rate, self.linkRate, self.errRate, self.badRate }) do
         for k, r in compat.spairs(tbl) do

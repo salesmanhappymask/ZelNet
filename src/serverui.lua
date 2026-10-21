@@ -1953,6 +1953,7 @@ function Console:settings()
             { label = "Intervals", hint = "beacon " .. tostring(cfg.beaconInterval) .. " hello " .. tostring(cfg.helloInterval), value = "intervals" },
             { label = "Message of the day", value = "motd" },
             { label = "Airlock control", hint = cfg.airlocks == false and "off" or "on", value = "airlocks" },
+            { label = "Public gateway", hint = M.gatewayHint(cfg), value = "gateway" },
             { label = "Console password", value = "password" },
         })
         if not choice then return nil end
@@ -2009,10 +2010,54 @@ function Console:settings()
                 self:audit("settings", "airlocks", tostring(cfg.airlocks), true)
                 self:say("Airlock Control", "Airlock control is " .. (cfg.airlocks and "on" or "off") .. " after the next reboot.")
             end
+        elseif choice == "gateway" then
+            self:gatewaySettings()
         elseif choice == "password" then
             self:changePassword(true)
         end
     end
+end
+
+function M.gatewayHint(cfg)
+    if cfg.publicGateway == false then return "off" end
+    local n = type(cfg.publicBlock) == "table" and #cfg.publicBlock or 0
+    return n > 0 and ("on, " .. n .. " blocked") or "on"
+end
+
+function M.parseIds(text)
+    local out, seen = {}, {}
+    for part in tostring(text or ""):gmatch("[^,%s]+") do
+        local id = tonumber(part)
+        if not id or id < 0 or math.floor(id) ~= id then return nil, part end
+        if not seen[id] then
+            seen[id] = true
+            out[#out + 1] = id
+        end
+    end
+    return out
+end
+
+function Console:gatewaySettings()
+    local cfg = self.cfg
+    local ids = {}
+    for _, id in ipairs(type(cfg.publicBlock) == "table" and cfg.publicBlock or {}) do ids[#ids + 1] = tostring(id) end
+    local r = ui.form(self.surf, {
+        title = "Public Gateway",
+        intro = "Plain rednet computers use the network through rednet.lookup(\"zelnet\"). Block computer IDs with a comma separated list.",
+        fields = {
+            { label = "On (y/n):", key = "on", value = cfg.publicGateway == false and "n" or "y", maxLen = 1, required = true,
+                validate = function(v) return v == "y" or v == "n" or v == "Y" or v == "N", "Type y or n." end },
+            { label = "Blocked IDs:", key = "block", value = table.concat(ids, ", "), maxLen = 120,
+                validate = function(v)
+                    local list, bad = M.parseIds(v)
+                    return list ~= nil, "Not a computer ID: " .. tostring(bad)
+                end },
+        },
+    })
+    if not r then return end
+    cfg.publicGateway = (r.on == "y" or r.on == "Y") and true or false
+    cfg.publicBlock = M.parseIds(r.block) or {}
+    if self:save() then self:audit("settings", "gateway", M.gatewayHint(cfg), true) end
 end
 
 M.DISPLAY_ROLES = {

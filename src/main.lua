@@ -385,6 +385,29 @@ function M.appFor(n, cfg)
     return function() return routerui.run(n, { mode = mode }) end
 end
 
+function M.attachGateway(n, cfg)
+    local gateway = tryNeed("gateway")
+    if not gateway then return nil end
+    local function toServer(body) n:send(n.realm, gateway.CONTROL, body) end
+    local gw = gateway.new(n, {
+        isOff = function() return cfg.publicGateway == false end,
+        backend = {
+            seen = function(cid) toServer({ op = "seen", cid = cid }) end,
+            blocked = function() return false end,
+            connected = function() return n:isConnected() end,
+            op = toServer,
+        },
+    })
+    n:listen(gateway.CONTROL, function(msg)
+        local a = util.parseAddress(msg.src)
+        local b = msg.data
+        if not a or a.realm ~= n.realm or a.id or a.name or type(b) ~= "table" then return end
+        if b.op == "deliver" then gw:transmit(b.cid, b.msg) end
+    end)
+    gw:start()
+    return gw
+end
+
 function M.runDevice(cfg, opts)
     opts = opts or {}
     local node = need("node")
@@ -393,6 +416,7 @@ function M.runDevice(cfg, opts)
     local api = tryNeed("api")
     if api then api.attach(n) end
     M.attachUpdater(n, cfg, opts.update)
+    if cfg.role == "router" then M.attachGateway(n, cfg) end
     local app = opts.app or M.appFor(n, cfg)
     local ok, err = pcall(function() return n:loop(app) end)
     pcall(n.close, n)
