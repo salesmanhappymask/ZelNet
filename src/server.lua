@@ -23,6 +23,7 @@ M.SUB_TTL = 600
 M.MAX_SUBS_PER_NODE = 64
 M.MAX_TOPICS = 500
 M.PUB_MIN_GAP = 0.9
+M.CATCHUP_GAP = 600
 M.PUB_SUB_TTL = 86400
 M.PLAIN_TTL = 21600
 M.MAX_PLAIN = 1000
@@ -65,6 +66,7 @@ function M.new(ctx)
     self.topics = {}
     self.pubTimes = {}
     self.plain = {}
+    self.caughtUp = {}
     self.localNames = {}
     self.warnings = {}
     self.noted = {}
@@ -424,8 +426,9 @@ function Server:onHelloMsg(msg)
     if not dev.installed then fields.installed = compat.stamp() end
     self.reg:setInfo(dev.name, fields)
     if msg.rq then
-        self.node:reply(msg, { ok = true, realm = self.realm, server = self.myId, prog = version.program, time = compat.stamp() })
+        self.node:reply(msg, { ok = true, realm = self.realm, server = self.myId, prog = version.full(), time = compat.stamp() })
     end
+    if fields.prog and fields.prog ~= version.full() then self:catchUp(dev) end
 end
 
 function Server:resolveName(name)
@@ -757,20 +760,45 @@ function Server:prepareUpdate(text, ver)
     }
 end
 
-function Server:offerDevices()
+function Server:offerDevice(rec)
     local u = self.update
-    if not u then return 0 end
+    if not u or not rec.cid or rec.status == "revoked" or type(rec.key) ~= "string" then return false end
+    self.node:send(self.realm .. ":" .. rec.cid, "zn.update", {
+        op = "offer", version = u.version, size = u.size, sha = u.sha, chunks = u.chunks,
+        mac = crypto.mac(rec.key, M.updateAad(u.version, u.size, u.sha)),
+    })
+    return true
+end
+
+function Server:offerDevices()
+    if not self.update then return 0 end
     local n = 0
     for _, rec in pairs(self.reg.devices) do
-        if rec.cid and rec.status ~= "revoked" then
-            n = n + 1
-            self.node:send(self.realm .. ":" .. rec.cid, "zn.update", {
-                op = "offer", version = u.version, size = u.size, sha = u.sha, chunks = u.chunks,
-                mac = crypto.mac(rec.key, M.updateAad(u.version, u.size, u.sha)),
-            })
-        end
+        if self:offerDevice(rec) then n = n + 1 end
     end
     return n
+end
+
+function Server:ownUpdate()
+    if self.update then return self.update end
+    local text = util.readFile(self:programPath())
+    if type(text) ~= "string" or #text < 1000 then return nil end
+    if not text:find('build = "' .. tostring(version.build) .. '"', 1, true) then return nil end
+    self:prepareUpdate(text, version.full())
+    return self.update
+end
+
+function Server:catchUp(dev)
+    local now = compat.now()
+    local last = self.caughtUp[dev.name]
+    if last and now - last < M.CATCHUP_GAP then return false end
+    self.caughtUp[dev.name] = now
+    if not self:ownUpdate() then return false end
+    if self:offerDevice(dev) then
+        self.log.info("offered " .. self.update.version .. " to " .. tostring(dev.name) .. ", which runs " .. tostring(dev.prog or "an older build"))
+        return true
+    end
+    return false
 end
 
 function Server:pushUpdate(text, ver)

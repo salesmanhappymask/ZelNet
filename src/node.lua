@@ -693,7 +693,7 @@ end
 
 function Node:sendHello()
     if self.isServer then return end
-    local body = { name = self.name, role = self.role, prog = version.program, cid = self.myId, hops = self.parent and (self.parent.hops + 1) or nil }
+    local body = { name = self.name, role = self.role, prog = version.full(), cid = self.myId, hops = self.parent and (self.parent.hops + 1) or nil }
     self:requestAsync(self.realm, "zn.hello", body, function(reply, err)
         if reply and reply.ok then
             local was = self.connected
