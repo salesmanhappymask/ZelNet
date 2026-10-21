@@ -105,8 +105,9 @@ function M.twoRealms(w, crypto, extraEarth, extraMars)
     eRecv:adjacent("north", eRecvDrive)
     mSend:adjacent("north", mSendDrive)
     mRecv:adjacent("north", mRecvDrive)
-    eSendDrive:insert(w:floppy({ label = "earth-mars" }))
-    mSendDrive:insert(w:floppy({ label = "mars-earth" }))
+    local media = M.bridgeMedia == "pocket" and w.pocket or w.floppy
+    eSendDrive:insert(media(w, { label = "earth-mars" }))
+    mSendDrive:insert(media(w, { label = "mars-earth" }))
     for _, set in ipairs({ { "earth", eSend, eRecv, eSendDrive, eRecvDrive }, { "mars", mSend, mRecv, mSendDrive, mRecvDrive } }) do
         w:connect(set[1], set[2], "tesseract_0")
         w:connect(set[1], set[3], "tesseract_1")

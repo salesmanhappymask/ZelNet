@@ -54,7 +54,7 @@ ZelNet checks this for you. Servers exchange a fingerprint of their Cipher Block
 A bridge uses two tesseracts and two disk drives on each side, exactly like TekBridge:
 
 * Your **send** tesseract and the peer's **receive** tesseract share one frequency; your **receive** tesseract and the peer's **send** tesseract share another. Set them to send and receive items.
-* Each tesseract touches one disk drive. Put one floppy in your send drive and one in the peer's send drive to start.
+* Each tesseract touches one disk drive. Put one blank pocket computer in your send drive and one in the peer's send drive to start. A pocket computer carries up to about 1 MB per trip; floppy disks still work but carry only 125 KB.
 * The console's Bridges page finds the gear and probes the directions for you.
 
 ### BitNet towers

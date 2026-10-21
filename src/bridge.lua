@@ -11,13 +11,14 @@ M.FILE = "zn_bridge.dat"
 M.FORMAT = 1
 M.DIRECTIONS = { "north", "south", "east", "west", "up", "down" }
 M.OPPOSITE = { north = "south", south = "north", east = "west", west = "east", up = "down", down = "up" }
-M.DEFAULTS = { settle = 0.3, poll = 0.5, maxBatch = 100000 }
+M.DEFAULTS = { settle = 0.3, poll = 0.5, maxBatch = 990000 }
 M.FLOPPY_MAX = 125000
+M.MEDIA_MAX = 1000000
 M.BATCH_MIN = 2048
-M.BATCH_CAP = 120000
+M.BATCH_CAP = 1000000
 M.HEADER_ROOM = 512
-M.QUEUE_MAX = 500
-M.QUEUE_BYTES = 1000000
+M.QUEUE_MAX = 3000
+M.QUEUE_BYTES = 3000000
 M.QUEUE_TTL = 3600
 M.MAX_TRIES = 3
 M.RETURN_WARN = 120
@@ -108,7 +109,7 @@ end
 
 function M.decodeBatch(text)
     if type(text) ~= "string" or text == "" then return nil, "empty file" end
-    if #text > M.FLOPPY_MAX + 4096 then return nil, "file too large" end
+    if #text > M.MEDIA_MAX + 4096 then return nil, "file too large" end
     local head, framesText
     local at = text:find(",frames=", 1, true)
     if at and text:sub(-2) == ",}" then
@@ -163,7 +164,7 @@ function M.probe(tessName, driveName, settle)
     if type(tessName) ~= "string" or not peripheral.isPresent(tessName) then return nil, "tesseract not found" end
     if not methodSet(tessName).pullItem then return nil, tessName .. " has no pullItem (is OpenPeripheral installed?)" end
     if type(driveName) ~= "string" or peripheral.getType(driveName) ~= "drive" then return nil, "drive not found" end
-    if not M.diskIn(driveName) then return nil, "put a floppy in " .. driveName .. " first" end
+    if not M.diskIn(driveName) then return nil, "put a blank pocket computer (or a floppy) in " .. driveName .. " first" end
     local prev
     for _, dir in ipairs(M.DIRECTIONS) do
         if prev and M.diskGone(driveName) then return prev end
@@ -174,7 +175,7 @@ function M.probe(tessName, driveName, settle)
         if ok and M.diskGone(driveName) then return dir end
     end
     if prev and M.diskGone(driveName) then return prev end
-    return nil, "the floppy did not leave " .. driveName .. "; check that " .. tessName .. " touches the drive, is linked to the other side, and that the drive on the other side is empty"
+    return nil, "the pocket computer did not leave " .. driveName .. "; check that " .. tessName .. " touches the drive, is linked to the other side, and that the drive on the other side is empty"
 end
 
 local function checkNumber(problems, bcfg, key, lo, hi)
@@ -232,7 +233,7 @@ function M.check(bcfg, opts)
         end
     end
     if opts.disks and present.sendDrive and not M.diskIn(bcfg.sendDrive) then
-        add("no floppy in the send drive " .. bcfg.sendDrive .. " (each side keeps one floppy in its send drive)")
+        add("nothing in the send drive " .. bcfg.sendDrive .. " (each side keeps one blank pocket computer, or a floppy, in its send drive)")
     end
     return #problems == 0, problems
 end
@@ -427,7 +428,7 @@ function Bridge:tryPull(tess, drive, dir)
     if (tonumber(moved) or 0) > 0 then
         self.badDirs[tess] = self.badDirs[tess] or {}
         self.badDirs[tess][dir] = true
-        self:notice("pulled an item from the " .. dir .. " side of " .. tess .. " that was not the floppy; that side is skipped from now on")
+        self:notice("pulled an item from the " .. dir .. " side of " .. tess .. " that was not the bridge disk; that side is skipped from now on")
     end
     return false
 end
@@ -471,8 +472,8 @@ function Bridge:eject(tess, drive, dirKey, full)
         return true
     end
     self.streak[dirKey] = self.streak[dirKey] + 1
-    if #order == 0 then return false, "floppy did not leave " .. drive .. " (no direction left to try)" end
-    return false, "floppy did not leave " .. drive .. " (tried " .. table.concat(order, " ") .. ")"
+    if #order == 0 then return false, "the bridge disk did not leave " .. drive .. " (no direction left to try)" end
+    return false, "the bridge disk did not leave " .. drive .. " (tried " .. table.concat(order, " ") .. ")"
 end
 
 function Bridge:saveDir(dirKey, dir)
@@ -518,12 +519,12 @@ function Bridge:acceptFile(path)
     end
     if not batch then
         self.stats.rejected = self.stats.rejected + 1
-        self:notice("rejected a floppy in the receive drive: " .. tostring(why))
+        self:notice("rejected the disk in the receive drive: " .. tostring(why))
         return false
     end
     self:deliver(batch)
     pcall(fs.delete, path)
-    if fs.exists(path) then self:notice("cannot delete the batch file on the receive floppy") end
+    if fs.exists(path) then self:notice("cannot delete the batch file on the received disk") end
     return true
 end
 
@@ -548,12 +549,12 @@ function Bridge:serviceReceive(now, force)
         local path = mount .. "/" .. M.FILE
         if fs.exists(path) then accepted = self:acceptFile(path) end
     elseif M.diskIn(drive) then
-        self:notice("returning an item in " .. drive .. " that is not a floppy")
+        self:notice("returning an item in " .. drive .. " that is not a pocket computer or floppy")
     end
     if not accepted then self.stats.returned = self.stats.returned + 1 end
     local ok, why = self:eject(c.recvTess, drive, "recvDir", force or self.full.recv)
     if not ok then
-        self:setFault("recv", "cannot return the floppy to " .. tostring(self.peer) .. ": " .. why, true)
+        self:setFault("recv", "cannot return the bridge disk to " .. tostring(self.peer) .. ": " .. why, true)
         return false
     end
     self.recvDisk = false
@@ -570,7 +571,7 @@ function Bridge:adoptFile(path, where)
         self:note("info", "found unsent batch " .. tostring(batch.seq) .. " in the " .. where .. ", queued " .. n .. " packet(s) again")
     elseif batch.from == self.peer and batch.to == self.realm then
         self:deliver(batch)
-        self:notice("a floppy from " .. self.peer .. " arrived in the " .. where .. "; check the tesseract frequencies")
+        self:notice("a bridge disk from " .. self.peer .. " arrived in the " .. where .. "; check the tesseract frequencies")
     end
 end
 
@@ -585,7 +586,7 @@ function Bridge:takeReturn(drive, diskId, now)
     local path = mount and (mount .. "/" .. M.FILE)
     local present = path and fs.exists(path)
     if not mount or (fl.disk ~= nil and diskId ~= nil and fl.disk ~= diskId) then
-        self:notice("a different " .. (mount and "floppy" or "item") .. " is in the send drive; sending " .. #fl.items .. " packet(s) again")
+        self:notice("a different " .. (mount and "disk" or "item") .. " is in the send drive; sending " .. #fl.items .. " packet(s) again")
         self:putBack(fl.items, false)
         if present then self:adoptFile(path, "send drive") end
         return
@@ -601,7 +602,7 @@ function Bridge:takeReturn(drive, diskId, now)
     pcall(fs.delete, path)
     if batch and batch.from == self.peer and batch.to == self.realm then
         self:deliver(batch)
-        self:notice("a floppy from " .. self.peer .. " arrived in the send drive; check the tesseract frequencies")
+        self:notice("a bridge disk from " .. self.peer .. " arrived in the send drive; check the tesseract frequencies")
         self:putBack(fl.items, true)
         return
     end
@@ -612,7 +613,7 @@ end
 function Bridge:sendBatch(drive, diskId, now)
     local mount = M.mountOf(drive)
     if not mount then
-        self:setFault("send", "the item in " .. drive .. " is not a floppy", true)
+        self:setFault("send", "the item in " .. drive .. " is not a pocket computer or floppy", true)
         return false
     end
     local path = mount .. "/" .. M.FILE
@@ -622,7 +623,7 @@ function Bridge:sendBatch(drive, diskId, now)
     local limit = math.min(self.maxBatch, free - M.HEADER_ROOM)
     local items, texts = self:takeBatch(limit, now)
     if #items == 0 then
-        if #self.queue > 0 then self:setFault("send", "the floppy in " .. drive .. " is full (" .. tostring(free) .. " bytes free)", true) end
+        if #self.queue > 0 then self:setFault("send", "the disk in " .. drive .. " is full (" .. tostring(free) .. " bytes free)", true) end
         return false
     end
     self.seq = self.seq + 1
@@ -630,7 +631,7 @@ function Bridge:sendBatch(drive, diskId, now)
     local ok, err = util.writeFile(path, text)
     if not ok then
         self:putBack(items, false)
-        self:setFault("send", "cannot write the send floppy: " .. tostring(err), true)
+        self:setFault("send", "cannot write the send disk: " .. tostring(err), true)
         return false
     end
     self.state = "sending"
@@ -660,10 +661,10 @@ function Bridge:serviceSend(now)
         if fl then
             if not fl.warned and now - fl.at > M.RETURN_WARN then
                 fl.warned = true
-                self:notice("floppy not back from " .. tostring(self.peer) .. " after " .. M.RETURN_WARN .. "s (is that bridge running?)")
+                self:notice("bridge disk not back from " .. tostring(self.peer) .. " after " .. M.RETURN_WARN .. "s (is that bridge running?)")
             end
         elseif #self.queue > 0 and now - self.noDiskSince > M.NO_DISK_GRACE then
-            self:setFault("disk", "no floppy in the send drive " .. drive, false)
+            self:setFault("disk", "no pocket computer or floppy in the send drive " .. drive, false)
         end
         return false
     end
@@ -691,7 +692,7 @@ function Bridge:sweep(now)
         end
     end
     if self.faults.recv and M.diskIn(self.cfg.recvDrive) then
-        self:note("info", "failsafe sweep: returning the floppy stuck in " .. self.cfg.recvDrive)
+        self:note("info", "failsafe sweep: returning the disk stuck in " .. self.cfg.recvDrive)
         self:serviceReceive(now, true)
     end
 end

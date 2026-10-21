@@ -1543,7 +1543,7 @@ local function pickDirection(surf, title, run, mod, tess, drive, label)
         local idx = ui.menu(surf, {
             title = title, subtitle = "Side of " .. tess .. " that faces the other dimension", items = items,
             draw = function(page, ix, iy, iw)
-                return page:wrapped(ix, iy, iw, 3, "The probe moves the floppy in " .. drive .. " through " .. tess .. ". It reaches the " .. label .. " on the other side and comes back once that bridge runs.", page.c.muted) + 1
+                return page:wrapped(ix, iy, iw, 3, "The probe moves the disk in " .. drive .. " through " .. tess .. ". It reaches the " .. label .. " on the other side and comes back once that bridge runs.", page.c.muted) + 1
             end,
         })
         if not idx then return nil end
@@ -1562,7 +1562,7 @@ function M.bridgeWizard(surf, cfg, run, mod)
     run = run or function(_, _, fn) return fn() end
     local r = ui.form(surf, {
         title = "New Bridge",
-        intro = "A bridge needs two tesseracts and two disk drives on each side, one pair for each direction, and a floppy in each send drive.",
+        intro = "A bridge needs two tesseracts and two disk drives on each side, one pair for each direction, and a blank pocket computer (or a floppy) in each send drive.",
         fields = { {
             label = "Peer realm:", key = "peer", required = true, maxLen = 12,
             validate = function(v)
