@@ -1,4 +1,4 @@
-local __mods, ZN = "packed", { program = "1.0.0", build = "16783ee5", release = 28, size = 573501 }
+local __mods, ZN = "packed", { program = "1.0.1", build = "b05b3ee6", release = 29, size = 573501 }
 if shell and shell.getRunningProgram and print then
 local ok, run = pcall(shell.getRunningProgram)
 if ok and type(run) == "string" and string.find(string.lower(run), "zelnet", 1, true) then print("Starting ZelNet r" .. ZN.release .. " (" .. ZN.build .. ") ...") end
@@ -88,9 +88,9 @@ h.close`)go`0(7parent`(%a`&$mdir`$A%th`(C6(.*)/[^/]*$`%%V`$$H`T&2U`&$2`'0}`&%9"/
 q`$8H = `&$-+ 1
 q`&7,`%$7`$Q)`-%Mq.po`R&O[q.`%%A>`'$f`9H6v`$%0`'%%`$$[]`*%6`%$5`&,+`'$|=`(%+`V&YN`0%Xsiz`*'f`&%S-`,$_`/&0eek`+$V`.%a`*(<q`$$1`%&2REALM_PATTERN = "^[A-Z][A-Z0-9_]*$`'FFNAME`-$Ma-z][a-z0-9_%-`$$O`+)5ormReal`$k0`{%ax`(kj`S&'h
 `&g- 1`$<|s > 12 `R%]B`'kp`,&<`5Mf`'+0`0+.ormNam`~%cp`+%wlow`7%w6`/%w`+'e`M%vparseAddress(add`%K~`$%}`$$2`k%Bhbad a`%$c`(jzadd`%Ni*`-$V{ realm `%$>}`*,M`$$<, n`Q%5&addr`)Oz[^:]+):(.+)`&O|not`&$o`&%(`%$z`$%A`*$y`%@+`(*?`$$K`)$e`6&<`$$J`(&:not`%%_`5&7r`,&5id`+v6nod`Q%A&i`Q'Ggid`Q%.Za`Y')%i`Q'pB`Z'MR`*%-,`%$}id`,%6name`(&P`$*s`(%:`$&$a`S%Y/`0&Qnode`,S.`,%6`&$}`$$+`\'N4format`'*4`*(q`&%Bd`$c~n`Z'Y]`%%(`*%;`%$5`)v9`(O1`%$p`2-E`-+M`%&sa`)L9`5+rnot`Z%65`X%A\if a.`&&k`1+Y"*`,':`/&m`&$^, a.id or a.`Q(&x`.&-validPort(por`U%MZ`$-X`$$6`0uN#port`U'/>`%$3<= 24`(Vuport`S&u?%c]`1xq`$%@Topic(topi`U'po`$%B`%$7`1%C`$$<`*%D`%$4<= 48`$$5`$$4`V&hPw%._%-%*]+$"`$/m`'9Y`*%T`$$XMatche`$T8tern,`%$o`$(a`(z-=`%$9`5<U`)$M`$k;-`R&a2.`&(q`&)t`%xf`%Xb`($P1, -`)tS`%&3`=yG`&$O`)<W`')f`$$1`S%>Pvers`S'=@`'&a`\((S
-progra`$2)1.0.0",
-build`$$56783ee5",
-release = 28,
+progra`$2)1.0.1",
+build = "b05b3ee6",
+release = 29,
 protocol`$<\
 `&.1"ZelNet",
 `X%>[fu`$_H`(+T`'%;.. "+`$-WM.`$%<`/(Ulabel`%6,`)s&M.`&%T`S%,n`1{ddev`Z(-&`&%+`,Lp"r`/$H`'$~`4%ROf(prog, rel)

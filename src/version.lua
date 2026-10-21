@@ -1,5 +1,5 @@
 local M = {
-    program = "1.0.0",
+    program = "1.0.1",
     build = "dev",
     release = 0,
     protocol = 1,
