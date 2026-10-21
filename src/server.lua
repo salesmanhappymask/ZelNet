@@ -24,11 +24,14 @@ M.MAX_SUBS_PER_NODE = 64
 M.MAX_TOPICS = 500
 M.PUB_MIN_GAP = 0.9
 M.CATCHUP_GAP = 600
+M.REPORT_EVERY = 300
+M.REPORT_DELAY = 5
+M.REPORT_MAX_DEVICES = 200
 M.PUB_SUB_TTL = 86400
 M.PLAIN_TTL = 21600
 M.MAX_PLAIN = 1000
 M.UPDATE_CHUNK = 6000
-M.UPDATE_REBOOT_DELAY = 600
+M.UPDATE_REBOOT_DELAY = 120
 M.MAX_WARNINGS = 20
 M.MAX_INBOX_PORTS = 64
 M.FLUSH_INTERVAL = 30
@@ -67,6 +70,7 @@ function M.new(ctx)
     self.pubTimes = {}
     self.plain = {}
     self.caughtUp = {}
+    self.realmVersions = {}
     self.localNames = {}
     self.warnings = {}
     self.noted = {}
@@ -161,6 +165,11 @@ function Server:start()
     n:every(M.FLUSH_INTERVAL, function() self:flushState(false) end, "server-flush")
     n:every(M.FULL_FLUSH_INTERVAL, function() self:flushState(true) end, "server-flush-full")
     n:on("realm_up", function(r) self:onRealmUp(r) end)
+    if not self.isMain then
+        n:after(20, function() self:sendReport() end, "version-report-first")
+        n:every(M.REPORT_EVERY, function() self:sendReport() end, "version-report")
+        n:on("realm_up", function(r) if r == self.mainRealm then self:scheduleReport() end end)
+    end
     self.log.info("server " .. self.realm .. " (" .. self.cfg.role .. ") started as computer " .. tostring(self.myId))
     return true
 end
@@ -421,12 +430,20 @@ function Server:onHelloMsg(msg)
     end
     local b = type(msg.data) == "table" and msg.data or {}
     local fields = {}
-    if type(b.prog) == "string" then fields.prog = util.sanitize(b.prog):sub(1, 16) end
+    local oldProg, oldRel = dev.prog, dev.rel
+    if type(b.prog) == "string" then fields.prog = util.sanitize(b.prog):sub(1, 24) end
+    fields.rel = tonumber(b.rel) and math.floor(tonumber(b.rel)) or nil
     if type(b.hops) == "number" then fields.hops = math.floor(b.hops) end
     if not dev.installed then fields.installed = compat.stamp() end
     self.reg:setInfo(dev.name, fields)
     if msg.rq then
         self.node:reply(msg, { ok = true, realm = self.realm, server = self.myId, prog = version.full(), time = compat.stamp() })
+    end
+    if fields.prog and oldProg and fields.prog ~= oldProg then
+        self.log.info(tostring(dev.role) .. " " .. tostring(dev.name) .. " updated from " .. version.labelOf(oldProg, oldRel) .. " to " .. version.labelOf(fields.prog, fields.rel))
+        self:scheduleReport()
+    elseif fields.prog and not oldProg then
+        self:scheduleReport()
     end
     if fields.prog and fields.prog ~= version.full() then self:catchUp(dev) end
 end
@@ -706,7 +723,112 @@ function Server:isServerAddress(src)
     return a ~= nil and a.id == nil and a.name == nil and a.realm ~= "*"
 end
 
+function Server:versionReport()
+    local devices = {}
+    for _, d in ipairs(self.reg:list()) do
+        if #devices >= M.REPORT_MAX_DEVICES then break end
+        local rec = self.reg.devices[d.name]
+        devices[#devices + 1] = { name = d.name, role = d.role, prog = d.prog, rel = rec and rec.rel or nil, status = d.status }
+    end
+    local pending = self.installed and self.installed.version ~= version.full() and self.installed or nil
+    return { op = "versions", realm = self.realm, prog = version.full(), rel = version.release, devices = devices,
+        pending = pending and pending.version or nil, pendingRel = pending and pending.rel or nil }
+end
+
+function Server:sendReport()
+    self.reportArmed = false
+    if self.isMain then return end
+    self.node:send(self.mainRealm, "zn.admin", self:versionReport())
+end
+
+function Server:scheduleReport()
+    if self.isMain or self.reportArmed then return end
+    self.reportArmed = true
+    self.node:after(M.REPORT_DELAY, function() self:sendReport() end, "version-report")
+end
+
+function Server:onVersionReport(src, b)
+    local a = util.parseAddress(src)
+    if not self.isMain or not a or a.id or a.name or a.realm == self.realm or a.realm ~= util.normRealm(b.realm) then return end
+    local realm = a.realm
+    local prev = self.realmVersions[realm]
+    local entry = { prog = type(b.prog) == "string" and b.prog:sub(1, 24) or "?", rel = tonumber(b.rel), t = compat.now(), devices = {},
+        pending = type(b.pending) == "string" and b.pending:sub(1, 24) or nil, pendingRel = tonumber(b.pendingRel) }
+    local prevDevices = {}
+    if prev then
+        for _, d in ipairs(prev.devices) do prevDevices[d.name] = d end
+        if prev.prog ~= entry.prog then
+            self.log.info(realm .. " server updated from " .. version.labelOf(prev.prog, prev.rel) .. " to " .. version.labelOf(entry.prog, entry.rel))
+        end
+    end
+    if type(b.devices) == "table" then
+        for i, d in ipairs(b.devices) do
+            if i > M.REPORT_MAX_DEVICES then break end
+            if type(d) == "table" and type(d.name) == "string" then
+                local item = {
+                    name = util.sanitize(d.name):sub(1, 32), role = type(d.role) == "string" and d.role:sub(1, 12) or "?",
+                    prog = type(d.prog) == "string" and d.prog:sub(1, 24) or nil, rel = tonumber(d.rel),
+                    status = type(d.status) == "string" and d.status:sub(1, 12) or "?",
+                }
+                local old = prevDevices[item.name]
+                if old and old.prog and item.prog and old.prog ~= item.prog then
+                    self.log.info(realm .. " " .. item.role .. " " .. item.name .. " updated to " .. version.labelOf(item.prog, item.rel))
+                end
+                entry.devices[#entry.devices + 1] = item
+            end
+        end
+    end
+    self.realmVersions[realm] = entry
+    if entry.prog ~= version.full() and entry.pending ~= version.full() then self:catchUpRealm(realm) end
+end
+
+function Server:catchUpRealm(realm)
+    local now = compat.now()
+    local key = "realm:" .. realm
+    local last = self.caughtUp[key]
+    if last and now - last < M.CATCHUP_GAP then return false end
+    self.caughtUp[key] = now
+    if not self:ownUpdate() then return false end
+    local u = self.update
+    self.node:send(realm, "zn.update", {
+        op = "offer", version = u.version, rel = u.rel, size = u.size, sha = u.sha, chunks = u.chunks,
+        mac = crypto.mac(self.cfg.backboneKey, M.updateAad(u.version, u.size, u.sha)),
+    })
+    self.log.info("offered " .. version.labelOf(u.version, u.rel) .. " to " .. realm .. ", which runs " .. version.labelOf(self.realmVersions[realm] and self.realmVersions[realm].prog, self.realmVersions[realm] and self.realmVersions[realm].rel))
+    return true
+end
+
+function Server:networkVersions()
+    local out = { { realm = self.realm, main = self.isMain, prog = version.full(), rel = version.release, t = 0, devices = {} } }
+    for _, d in ipairs(self.reg:list()) do
+        local rec = self.reg.devices[d.name]
+        out[1].devices[#out[1].devices + 1] = { name = d.name, role = d.role, prog = d.prog, rel = rec and rec.rel or nil, status = d.status }
+    end
+    local now = compat.now()
+    local known = {}
+    for realm, e in pairs(self.realmVersions) do
+        known[realm] = true
+        out[#out + 1] = { realm = realm, prog = e.prog, rel = e.rel, t = now - e.t, devices = e.devices, pending = e.pending, pendingRel = e.pendingRel }
+    end
+    local reach = {}
+    for _, r in ipairs(self:realms()) do
+        reach[r.realm] = r.reachable
+        if r.realm ~= self.realm and not known[r.realm] then out[#out + 1] = { realm = r.realm, devices = {} } end
+    end
+    for _, e in ipairs(out) do e.reachable = e.realm == self.realm or reach[e.realm] == true end
+    table.sort(out, function(x, y)
+        if x.realm == self.realm then return true end
+        if y.realm == self.realm then return false end
+        return x.realm < y.realm
+    end)
+    return out
+end
+
 function Server:onAdminMsg(msg)
+    if type(msg.data) == "table" and msg.data.op == "versions" then
+        self:onVersionReport(msg.src, msg.data)
+        return
+    end
     local allowed = msg.src == self.realm or (self:isServerAddress(msg.src) and util.parseAddress(msg.src).realm == self.mainRealm)
     local b = msg.data
     local reply
@@ -753,9 +875,10 @@ end
 function Server:prepareUpdate(text, ver)
     local sha = crypto.sha256(text)
     local chunks = math.ceil(#text / M.UPDATE_CHUNK)
-    self.update = { text = text, version = ver, sha = sha, size = #text, chunks = chunks }
+    local rel = tonumber(text:match("release = (%d+)"))
+    self.update = { text = text, version = ver, rel = rel, sha = sha, size = #text, chunks = chunks }
     return {
-        op = "offer", version = ver, size = #text, sha = sha, chunks = chunks,
+        op = "offer", version = ver, rel = rel, size = #text, sha = sha, chunks = chunks,
         mac = crypto.mac(self.cfg.backboneKey, M.updateAad(ver, #text, sha)),
     }
 end
@@ -811,7 +934,7 @@ function Server:pushUpdate(text, ver)
     self.updateOffer = offer
     self:broadcastRealms("zn.update", offer)
     self:offerDevices()
-    self.log.info("network update " .. ver .. " offered")
+    self.log.info("network update " .. version.labelOf(ver, self.update.rel) .. " offered to every realm and device")
     return true
 end
 
@@ -878,8 +1001,10 @@ function Server:installUpdate(text, ver)
         return false
     end
     self:prepareUpdate(text, ver)
+    self.installed = { version = ver, rel = self.update.rel }
     self:offerDevices()
-    self:warn("update " .. ver .. " installed")
+    self:scheduleReport()
+    self:warn("update " .. version.labelOf(ver, self.update.rel) .. " installed")
     self.node:emit("update_installed", ver)
     if self.cfg.updateReboot ~= false then
         self.node:after(M.UPDATE_REBOOT_DELAY, function()

@@ -117,10 +117,10 @@ end
 M.isBundle = isBundle
 
 local STUB = [==[
-local __mods, ZN = "packed", { program = "%PROGRAM%", build = "%BUILD%", size = %LEN% }
+local __mods, ZN = "packed", { program = "%PROGRAM%", build = "%BUILD%", release = %RELEASE%, size = %LEN% }
 if shell and shell.getRunningProgram and print then
 local ok, run = pcall(shell.getRunningProgram)
-if ok and type(run) == "string" and string.find(string.lower(run), "zelnet", 1, true) then print("Starting ZelNet " .. ZN.program .. "+" .. ZN.build .. " ...") end
+if ok and type(run) == "string" and string.find(string.lower(run), "zelnet", 1, true) then print("Starting ZelNet r" .. ZN.release .. " (" .. ZN.build .. ") ...") end
 end
 local P = [@@[
 %PACKED%]@@]
@@ -214,7 +214,8 @@ function M.makeStub(build)
     local eq = string.rep("=", level)
     local program = build:match('program%s*=%s*"(%d[%w%.%-_]*)"') or "0"
     local buildId = build:match('build%s*=%s*"(%w+)"') or "dev"
-    local head = STUB:gsub("@@", eq):gsub("%%PROGRAM%%", program):gsub("%%BUILD%%", buildId):gsub("%%LEN%%", tostring(#build))
+    local release = build:match("release = (%d+)") or "0"
+    local head = STUB:gsub("@@", eq):gsub("%%PROGRAM%%", program):gsub("%%BUILD%%", buildId):gsub("%%RELEASE%%", release):gsub("%%LEN%%", tostring(#build))
     local i = head:find("%PACKED%", 1, true)
     return head:sub(1, i - 1) .. packed .. head:sub(i + #"%PACKED%")
 end

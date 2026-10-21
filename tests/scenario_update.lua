@@ -30,6 +30,7 @@ end
 
 updateMenu(earth, 11)
 S.shot(earth, "UPDATE MENU")
+earth:pressKey(S.keys.down)
 earth:pressKey(S.keys.enter)
 w:run(5)
 S.shot(earth, "BLOCKED BY WHITELIST")
@@ -37,7 +38,7 @@ earth:pressKey(S.keys.enter)
 w:run(1)
 
 http.whitelist = "*pastebin.com;*computercraft.info;*githubusercontent.com"
-updateMenu(earth, 0)
+earth:pressKey(S.keys.down)
 earth:pressKey(S.keys.enter)
 w:run(10)
 S.shot(earth, "DOWNLOADED")

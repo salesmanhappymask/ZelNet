@@ -97,7 +97,7 @@ function M.cli(args, env)
         M.usage()
         return
     elseif cmd == "version" then
-        say("ZelNet " .. version.full() .. " (protocol " .. version.protocol .. ")")
+        say("ZelNet " .. version.label() .. " (" .. version.full() .. ", protocol " .. version.protocol .. ")")
         return version.program
     elseif cmd == "setup" then
         return M.setupCommand(env)
@@ -125,9 +125,14 @@ function M.updateCommand(url)
         return
     end
     local cfg = M.loadConfig()
+    if cfg and cfg.role == "satellite" then
+        say("Satellites run Main's version and update from Main by themselves.", colors.yellow)
+        say("Update Main (" .. tostring(cfg.mainRealm) .. ") and this server follows within minutes.")
+        return
+    end
     local opts = cfg or {}
     if url then opts = { updateUrl = url } end
-    say("ZelNet " .. version.full() .. " installed.")
+    say("ZelNet " .. version.label() .. " (" .. version.full() .. ") installed.")
     say("Downloading " .. up.url(opts) .. " ...")
     local got, err = up.fetch(opts)
     if not got then
@@ -135,7 +140,7 @@ function M.updateCommand(url)
         return
     end
     if got.same then
-        say("Already up to date (" .. got.version .. ").", colors.lime)
+        say("Already up to date (" .. got.label .. ").", colors.lime)
         return got.version
     end
     local path = (cfg and cfg.programPath) or M.PROGRAM_PATH
@@ -144,9 +149,9 @@ function M.updateCommand(url)
         say("Cannot install: " .. tostring(ierr), colors.red)
         return
     end
-    say("Installed ZelNet " .. got.version .. " (" .. util.fmtBytes(got.size) .. ") as " .. path .. ".", colors.lime)
+    say("Installed ZelNet " .. got.label .. " (" .. util.fmtBytes(got.size) .. ") as " .. path .. ".", colors.lime)
     if cfg and cfg.role == "main" then
-        say("To update the whole network, open Update network on the console.")
+        say("After this server reboots, every satellite, router and client is brought to " .. got.label .. " by itself.")
     end
     say("Reboot or run zelnet to start it.")
     return got.version
@@ -535,7 +540,7 @@ function M.onDeviceUpdate(n, cfg, msg, state)
     end
     if b.version == version.full() or state.busy or state.done == b.sha then return end
     state.busy = true
-    n.log.info("downloading update " .. b.version)
+    n.log.info("downloading update " .. version.labelOf(b.version, b.rel))
     local text, err = M.fetchUpdate(n, authority, b)
     if not text then
         state.busy = false
@@ -557,7 +562,7 @@ function M.onDeviceUpdate(n, cfg, msg, state)
         return
     end
     state.done = b.sha
-    n.log.warn("update " .. b.version .. " installed, rebooting")
+    n.log.warn("update " .. version.labelOf(b.version, b.rel) .. " installed, rebooting")
     n:emit("update_installed", b.version)
     if state.opts.noReboot then return true end
     compat.sleep(state.opts.delay or M.UPDATE_DELAY)

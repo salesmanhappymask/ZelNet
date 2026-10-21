@@ -818,7 +818,7 @@ function Console:mainMenu()
                 return nil
             end,
             interval = 5,
-            footer = "ZelNet " .. version.program,
+            footer = "ZelNet " .. version.label(),
         })
         if idx then
             sel = idx
@@ -2129,31 +2129,105 @@ end
 function Console:updatePage()
     local isMain = self.cfg.role == "main"
     local okU, up = pcall(need, "updater")
-    local items = {}
-    if okU and up then items[#items + 1] = { label = "Download from the repo", hint = "GitHub", value = "repo" } end
-    if isMain then
-        items[#items + 1] = { label = "Send a program file", hint = "from disk", value = "file" }
-    else
-        items[#items + 1] = { label = "Update status", value = "status" }
+    while true do
+        local items = {}
+        items[#items + 1] = { label = isMain and "Network versions" or "Versions", hint = self:versionsHint(), value = "versions" }
+        if isMain then
+            if okU and up then items[#items + 1] = { label = "Download from the repo", hint = "GitHub", value = "repo" } end
+            items[#items + 1] = { label = "Send a program file", hint = "from disk", value = "file" }
+        else
+            items[#items + 1] = { label = "Update status", value = "status" }
+        end
+        local choice = self:choose(isMain and "Update Network" or "Update", "This server runs ZelNet " .. version.label() .. " (" .. version.full() .. ")", items)
+        if not choice then return nil end
+        local r
+        if choice == "versions" then
+            self:versionsPage()
+        elseif choice == "repo" then
+            r = self:repoUpdate(up)
+        elseif choice == "file" then
+            r = self:fileUpdate()
+        elseif choice == "status" then
+            self:updateStatus()
+        end
+        if r == "reboot" or r == "exit" then return r end
     end
-    local choice = self:choose(isMain and "Update Network" or "Update", "This server runs ZelNet " .. version.full(), items)
-    if choice == "repo" then
-        return self:repoUpdate(up)
-    elseif choice == "file" then
-        return self:fileUpdate()
-    elseif choice == "status" then
-        return self:updateStatus()
+end
+
+function Console:versionsHint()
+    local srv = self.ctx.server
+    if not srv or not srv.networkVersions then return nil end
+    local ok, list = pcall(srv.networkVersions, srv)
+    if not ok or type(list) ~= "table" then return nil end
+    local total, current = 0, 0
+    for _, e in ipairs(list) do
+        if e.prog then
+            total = total + 1
+            if e.prog == version.full() then current = current + 1 end
+        end
+        for _, d in ipairs(e.devices or {}) do
+            if d.prog then
+                total = total + 1
+                if d.prog == version.full() then current = current + 1 end
+            end
+        end
     end
-    return nil
+    return current .. " of " .. total .. " current"
+end
+
+function M.versionRows(list, c, now)
+    local cur = version.full()
+    local rows = {}
+    local function state(prog, rel, online)
+        if not prog then return "no report", c.muted end
+        local label = version.labelOf(prog, rel)
+        if prog == cur then return label .. " current", online == false and c.muted or c.ok end
+        return label .. " behind", c.warn
+    end
+    for _, e in ipairs(list) do
+        local right, color = state(e.prog, e.rel, e.reachable)
+        if e.pending and e.prog ~= cur then
+            right = version.labelOf(e.prog, e.rel) .. ", " .. version.labelOf(e.pending, e.pendingRel) .. " on reboot"
+            color = c.warn
+        end
+        local name = e.realm .. (e.main and " (Main)" or "")
+        if e.realm and not e.main and e.t and e.t > 0 then name = name .. ", " .. util.fmtDuration(e.t) .. " ago" end
+        if e.reachable == false then
+            right = (e.prog and version.labelOf(e.prog, e.rel) .. " " or "") .. "unreachable"
+            color = c.bad
+        end
+        rows[#rows + 1] = { text = name, right = right, color = color, rightColor = color }
+        for _, d in ipairs(e.devices or {}) do
+            local r, col = state(d.prog, d.rel, d.status == "online")
+            if d.status ~= "online" then r = r .. ", " .. tostring(d.status) end
+            rows[#rows + 1] = { text = "  " .. tostring(d.name) .. " (" .. tostring(d.role) .. ")", right = r, color = c.text, rightColor = col }
+        end
+    end
+    return rows
+end
+
+function Console:versionsPage()
+    local srv = self.ctx.server
+    return self:listView({
+        title = self.cfg.role == "main" and "Network Versions" or "Versions",
+        subtitle = function() return "Newest: " .. version.label() .. "  " .. tostring(self:versionsHint() or "") end,
+        rows = function()
+            local ok, list = pcall(srv.networkVersions, srv)
+            if not ok then return {} end
+            return M.versionRows(list, self.surf.c)
+        end,
+        empty = "No versions reported yet.",
+        interval = 5,
+    })
 end
 
 function Console:updateStatus()
     local st = self:snapshot(true).status or {}
     local lines = {
-        "This server runs ZelNet " .. version.full() .. ".",
-        "Updates come from Main (" .. tostring(self.cfg.mainRealm) .. ") over the backbone; this server installs them and reboots by itself.",
+        "This server runs ZelNet " .. version.label() .. " (" .. version.full() .. ").",
+        "Satellites always run Main's version. To update, update Main (" .. tostring(self.cfg.mainRealm) .. "): this server downloads it over the backbone, installs it and reboots by itself, then updates its own devices.",
     }
-    if st.update then lines[#lines + 1] = "Last update seen: " .. tostring(st.update.version) .. ", " .. util.fmtBytes(st.update.size or 0) end
+    if st.update then lines[#lines + 1] = "Last update seen: " .. version.labelOf(st.update.version, st.update.rel) .. ", " .. util.fmtBytes(st.update.size or 0) end
     self:say("Update Status", lines)
     return nil
 end
@@ -2167,11 +2241,11 @@ function Console:repoUpdate(up)
     end
     self:audit("update_download", got.version, nil, true)
     local isMain = self.cfg.role == "main"
-    local intro = "The repo has ZelNet " .. got.version .. " (" .. util.fmtBytes(got.size) .. "). This server runs " .. got.current .. "."
+    local intro = "The repo has ZelNet " .. got.label .. " (" .. util.fmtBytes(got.size) .. "). The network runs " .. got.currentLabel .. "."
     if got.same then intro = intro .. " They are the same build." end
     local items = {}
-    if isMain then items[#items + 1] = { label = "Install here and update the network", value = "network" } end
-    items[#items + 1] = { label = "Install on this server only", value = "local" }
+    if isMain then items[#items + 1] = { label = "Install and update the network", value = "network" } end
+    if not isMain then items[#items + 1] = { label = "Install on this server only", value = "local" } end
     local pick = ui.menu(self.surf, {
         title = "Download", items = (function()
             local out = {}
@@ -2190,9 +2264,10 @@ function Console:repoUpdate(up)
         self:audit("update_network", got.version, perr, pok)
         if not pok then return self:result("Update Network", false, perr) end
         self:say("Update Network", {
-            { text = "ZelNet " .. got.version .. " is installed here and offered to the network.", color = self.surf.c.ok },
-            "Satellites and devices download it, install it and reboot by themselves.",
-            "This server runs the new version after its next reboot. Wait until the satellites show " .. got.version .. " under Network, Realms, then use Reboot in the main menu.",
+            { text = "ZelNet " .. got.label .. " is installed here and offered to every satellite and device.", color = self.surf.c.ok },
+            "They download it, install it and reboot by themselves. Anything that is switched off or out of reach now gets it as soon as it reports in.",
+            "Watch Update Network, Network versions: each line turns to " .. got.label .. " as it updates.",
+            "This server runs the new version after its next reboot. Reboot it once the satellites show " .. got.label .. ".",
         })
         return nil
     end

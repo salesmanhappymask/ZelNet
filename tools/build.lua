@@ -40,7 +40,30 @@ for _, name in ipairs(modules) do
     a, b = checksum(name .. "\n" .. src, a, b)
 end
 local buildId = string.format("%04x%04x", b, a)
+
+local function shell(cmd)
+    local p = io.popen(cmd .. " 2>/dev/null")
+    if not p then return nil end
+    local text = p:read("*a")
+    p:close()
+    return text
+end
+
+local function releaseNumber()
+    local count = tonumber((shell("git -C \"" .. root .. "\" rev-list --count HEAD") or ""):match("%d+"))
+    if not count then return 0 end
+    local head = shell("git -C \"" .. root .. "\" show HEAD:dist/zelnet | head -c 200") or ""
+    if head:find('build = "' .. buildId .. '"', 1, true) then
+        local rel = tonumber(head:match("release = (%d+)"))
+        if rel then return rel end
+        return count
+    end
+    return count + 1
+end
+
+local release = tonumber(os.getenv("ZN_RELEASE") or "") or releaseNumber()
 sources.version = sources.version:gsub('build = "[%w]*"', 'build = "' .. buildId .. '"', 1)
+sources.version = sources.version:gsub("release = %d+", "release = " .. release, 1)
 
 local parts = {}
 parts[#parts + 1] = "local __mods, __cache, __loading = {}, {}, {}\n"
@@ -75,4 +98,4 @@ local fn, err = loadstring(bundle, "=zelnet")
 if not fn then error("bundle compile error: " .. tostring(err)) end
 os.execute("mkdir -p \"" .. out:match("^(.*)/[^/]*$") .. "\"")
 writeFile(out, bundle)
-io.write(string.format("built %s (%d modules, %d bytes, build %s)\n", out, #modules, #bundle, buildId))
+io.write(string.format("built %s (%d modules, %d bytes, build %s, release r%d)\n", out, #modules, #bundle, buildId, release))

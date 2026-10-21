@@ -49,6 +49,16 @@ local function fakeCtx(cfg)
             }
         end,
         devices = function() return {} end,
+        networkVersions = function()
+            local version = need("version")
+            return {
+                { realm = cfg.realm, main = true, prog = version.full(), rel = version.release, reachable = true,
+                    devices = { { name = "relay1", role = "router", prog = version.full(), rel = version.release, status = "online" } } },
+                { realm = "MARS", prog = "1.0.0+0ld0ld00", rel = 3, reachable = true, t = 40,
+                    devices = { { name = "outpost", role = "router", prog = "1.0.0", status = "offline" } } },
+                { realm = "VENUS", reachable = false, devices = {} },
+            }
+        end,
         realms = function() return { { realm = cfg.realm, reachable = true, metric = 0, main = true } } end,
         provision = function(_, role, name)
             rec.provisioned[#rec.provisioned + 1] = role .. ":" .. name
@@ -442,18 +452,31 @@ t.case("every console page opens and closes", function()
     back()
     run("updatePage", function() con:updatePage() end)
     t.ok(screen.has("Download from the repo"), screen.text())
+    t.ok(screen.has("Network versions"), screen.text())
+    t.ok(screen.has("2 of 4 current"), screen.text())
     reset()
-    ft.key("enter")
-    ft.key("enter")
-    run("updatePage", function() con:updatePage() end)
-    t.ok(screen.has("http API is turned off"), screen.text())
-    cfg.role = "satellite"
+    back()
+    run("versionsPage", function() con:versionsPage() end)
+    t.ok(screen.has("MARS"), screen.text())
+    t.ok(screen.has("r3 behind"), screen.text())
+    t.ok(screen.has("relay1 (router)"), screen.text())
+    t.ok(screen.has("unreachable"), screen.text())
     reset()
     ft.key("down")
     ft.key("enter")
     ft.key("enter")
+    back()
     run("updatePage", function() con:updatePage() end)
-    t.ok(screen.has("Update Status"), screen.text())
+    t.ok(hasAudit(rec, "update_download"), "repo download was not attempted")
+    cfg.role = "satellite"
+    reset()
+    back()
+    run("updatePage", function() con:updatePage() end)
+    t.ok(not screen.has("Download from the repo"), screen.text())
+    reset()
+    ft.key("enter")
+    run("updateStatus", function() con:updateStatus() end)
+    t.ok(screen.has("Satellites always run Main's version"), screen.text())
 end)
 
 t.case("bridge setup helper picks gear and probes the send side", function()

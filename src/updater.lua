@@ -68,7 +68,8 @@ function M.fetch(cfg, timeout)
     text = M.normalize(text)
     local ver, cerr = M.check(text)
     if not ver then return nil, cerr end
-    return { text = text, version = ver, url = url, size = #text, current = version.full(), same = ver == version.full() }
+    local rel = tonumber(text:match("release = (%d+)"))
+    return { text = text, version = ver, rel = rel, label = version.labelOf(ver, rel), url = url, size = #text, current = version.full(), currentLabel = version.label(), same = ver == version.full() }
 end
 
 function M.install(text, path)

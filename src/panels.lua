@@ -722,7 +722,7 @@ function Panels:tab_overview(page, area)
             { "Cipher", (cip.ok and tostring(cip.kind) or "off") .. (cip.name and (" on " .. tostring(cip.name)) or ""), cip.ok and c.ok or c.bad },
             { "Fingerprint", tostring(cip.fingerprint or "-") },
             { "Directory", "v" .. tostring(dir.ver or 0) .. ", " .. tostring(dir.users or 0) .. " users, " .. (dir.synced and "synced" or "syncing"), dir.synced and c.ok or c.warn },
-            { "Program", "ZelNet " .. version.full() .. " protocol " .. tostring(version.protocol) },
+            { "Program", "ZelNet " .. version.label() .. " (" .. version.full() .. ")" },
         }
         for i = 1, math.min(kh, #lines) do page:kv(kx, ky + i - 1, kw, lines[i][1], lines[i][2], lines[i][3]) end
     end
