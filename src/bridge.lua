@@ -170,7 +170,7 @@ function M.probe(tessName, driveName, settle)
         local ok = rethrow(pcall(peripheral.call, tessName, "pullItem", dir, 1, 1))
         if M.diskGone(driveName) then return dir end
         prev = ok and dir or nil
-        if ok then sleep(settle + 0.1) end
+        if ok then compat.sleep(settle + 0.1) end
         if ok and M.diskGone(driveName) then return dir end
     end
     if prev and M.diskGone(driveName) then return prev end
@@ -422,7 +422,7 @@ function Bridge:tryPull(tess, drive, dir)
     local ok, moved = rethrow(pcall(peripheral.call, tess, "pullItem", dir, 1, 1))
     if M.diskGone(drive) then return true end
     if not ok then return false, true end
-    sleep(self.settle)
+    compat.sleep(self.settle)
     if M.diskGone(drive) then return true end
     if (tonumber(moved) or 0) > 0 then
         self.badDirs[tess] = self.badDirs[tess] or {}
@@ -540,7 +540,7 @@ function Bridge:serviceReceive(now, force)
     self.state = "receiving"
     local mount = M.mountOf(drive)
     if not mount then
-        sleep(self.settle)
+        compat.sleep(self.settle)
         mount = M.mountOf(drive)
     end
     local accepted = false
@@ -579,7 +579,7 @@ function Bridge:takeReturn(drive, diskId, now)
     self.inflight = nil
     local mount = M.mountOf(drive)
     if not mount then
-        sleep(self.settle)
+        compat.sleep(self.settle)
         mount = M.mountOf(drive)
     end
     local path = mount and (mount .. "/" .. M.FILE)
@@ -747,7 +747,7 @@ function Bridge:run(onReceive)
             did = false
         end
         if self.stopped then break end
-        sleep(did and 0.05 or self.poll)
+        compat.sleep(did and 0.05 or self.poll)
     end
     self.running = false
 end

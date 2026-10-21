@@ -1,4 +1,5 @@
 local need = ...
+local compat = need("compat")
 local util = need("util")
 local ui = need("ui")
 
@@ -484,7 +485,7 @@ function Chat:run(hooks)
             end
         end
         if self.dirty then self:draw() end
-        local ev, a, b, c = os.pullEvent()
+        local ev, a, b, c = compat.pullUI()
         local act, arg = self:handle(ev, a, b, c)
         if act == "back" then
             self:leave()

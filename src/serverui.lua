@@ -12,9 +12,9 @@ local M = {}
 
 M.LOCK_AFTER = 300
 M.LOCK_SIGNAL = "zn_console_lock"
-M.SENSOR_POLL = 0.5
-M.SENSOR_WATCH = 1
-M.SENSOR_MISSES = 5
+M.SENSOR_POLL = 1
+M.SENSOR_WATCH = 2
+M.SENSOR_MISSES = 3
 M.SENSOR_RANGE = 3
 M.SENSOR_RETRY = 10
 M.MAX_FAILS = 3
@@ -503,7 +503,7 @@ function Console:listView(o)
         end
         self:footer(page, ix, iy + ih - 1, iw, o.actions)
         surf:flush()
-        local ev, a, b, c = os.pullEvent()
+        local ev, a, b, c = compat.pullUI()
         local action
         local px, py, kind, btn = surf:pointer(ev, a, b, c)
         if px then
@@ -630,10 +630,9 @@ function Console:lockScreen()
     self.lockReq = nil
     self.misses = 0
     local pw, errMsg = "", nil
-    local timer = os.startTimer(M.SENSOR_POLL)
     while true do
         self:drawLock(pw, errMsg)
-        local ev, a = os.pullEvent()
+        local ev, a = compat.pullUI()
         if ev == "char" then
             if #pw < 64 then pw = pw .. a end
             errMsg = nil
@@ -662,8 +661,6 @@ function Console:lockScreen()
                 end
                 pw = ""
             end
-        elseif ev == "timer" and a == timer then
-            timer = os.startTimer(M.SENSOR_POLL)
         elseif ev == "zn_prox_unlock" then
             if self.near and not self.latch then
                 self:unlock("proximity")
@@ -689,6 +686,7 @@ function Console:unlock(method)
 end
 
 function Console:onSensorResult(near, note, who)
+    if self.locked and note ~= self.sensorNote then os.queueEvent("zn_console_wake") end
     self.near = near and true or false
     self.sensorNote = note
     self.nearWho = self.near and who or nil
@@ -714,7 +712,7 @@ function Console:sensorTask()
         local players = M.playerList(self.cfg.adminPlayer)
         if #players == 0 then
             self.sensorNote = nil
-            sleep(M.SENSOR_RETRY)
+            compat.sleep(M.SENSOR_RETRY)
         else
             if not prox then
                 prox = M.findSensor()
@@ -724,10 +722,10 @@ function Console:sensorTask()
                 local near, note, who = M.scanTargets(prox, players, self.cfg.adminRange)
                 if note == "no sensor data" then prox = nil end
                 self:onSensorResult(near, note, who)
-                sleep(self.locked and M.SENSOR_POLL or M.SENSOR_WATCH)
+                compat.sleep(self.locked and M.SENSOR_POLL or M.SENSOR_WATCH)
             else
                 self:onSensorResult(false, "no sensor attached")
-                sleep(M.SENSOR_RETRY)
+                compat.sleep(M.SENSOR_RETRY)
             end
         end
     end
@@ -747,7 +745,7 @@ function Console:dashboard()
         surf:field(1, surf.h, surf.w, "Ctrl or Backspace: back", c.dim, c.bg, "center")
         page:hotspot(1, 1, surf.w, surf.h, "back")
         surf:flush()
-        local ev, a, b, cc = os.pullEvent()
+        local ev, a, b, cc = compat.pullUI()
         if ev == "timer" and a == timer then
             timer = os.startTimer(1)
         elseif ev == "key" and (ui.isCtrl(a) or a == keys.backspace or a == keys.enter) then
@@ -819,7 +817,7 @@ function Console:mainMenu()
                 self:refreshHints(items)
                 return nil
             end,
-            interval = 2,
+            interval = 5,
             footer = "ZelNet " .. version.program,
         })
         if idx then
@@ -1713,7 +1711,7 @@ function Console:airlocks()
             { label = "Poll", key = "r" }, { label = "Find", key = "d" },
         })
         surf:flush()
-        local ev, a, b, cc = os.pullEvent()
+        local ev, a, b, cc = compat.pullUI()
         local action
         local px, py, kind, btn = surf:pointer(ev, a, b, cc)
         if px then
@@ -2072,6 +2070,7 @@ function Console:displaySettings()
     self.cfg.displays = out
     if self.panels then self.panels:reset() end
     if self:save() then self:audit("settings", "displays", M.displayHint(self.cfg), true) end
+    os.queueEvent("zn_panel")
     return nil
 end
 

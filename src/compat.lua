@@ -138,8 +138,51 @@ function M.spairs(t)
     end
 end
 
+M.NOISE = {
+    modem_message = true, bitnet_message = true, rednet_message = true, task_complete = true,
+    zn_work = true, zn_spawn = true, zn_breathe = true, zn_clock = true, zn_reply = true, zn_msg = true, zn_unpack = true, zn_install = true,
+}
+M.QUIET_KEEP = 64
+
+local quiet, quietRing, quietPos = {}, {}, 0
+
+function M.quietTimer(seconds)
+    local id = os.startTimer(seconds)
+    quietPos = quietPos % M.QUIET_KEEP + 1
+    local old = quietRing[quietPos]
+    if old ~= nil then quiet[old] = nil end
+    quietRing[quietPos] = id
+    quiet[id] = true
+    return id
+end
+
+function M.isNoise(ev, a)
+    if M.NOISE[ev] then return true end
+    return ev == "timer" and quiet[a] == true
+end
+
+function M.sleep(seconds)
+    if not M.isCC() or not coroutine.running() then return end
+    local id = M.quietTimer(seconds or 0)
+    while true do
+        local ev, a = os.pullEvent("timer")
+        if a == id then return end
+    end
+end
+
+local function packn(...)
+    return { n = select("#", ...), ... }
+end
+
+function M.pullUI(filter)
+    while true do
+        local ev = packn(os.pullEvent(filter))
+        if not M.isNoise(ev[1], ev[2]) then return M.unpack(ev, 1, ev.n) end
+    end
+end
+
 local breathCount = 0
-local breathEvery = 40
+local breathEvery = 20
 
 function M.setBreathEvery(n)
     breathEvery = math.max(1, n)

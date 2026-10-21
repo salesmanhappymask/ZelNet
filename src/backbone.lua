@@ -148,7 +148,6 @@ function Backbone:start()
     n:after(0.5, function() self:sendHellos() end, "bb-hello-first")
     n:every(self:helloInterval(), function() self:sendHellos() end, "bb-hello")
     n:every(self:routeInterval(), function() self:advertise() end, "bb-advert")
-    n:every(1, function() self:tick() end, "bb-tick")
     n:every(5, function() self:maintain() end, "bb-maintain")
     n:every(M.RETRY_INTERVAL, function() self:retryQueue() end, "bb-retry")
     n:every(120, function() self:checkCipher() end, "bb-cipher")
@@ -260,6 +259,7 @@ function Backbone:onHello(f, linkId, dist)
     if nb.up and not wasUp then
         self.log.info("backbone neighbor up: " .. d.realm .. " (" .. nb.kind .. ")")
         self.advertDue = true
+        self:kick()
         self:recompute()
     elseif wasUp and not nb.up then
         nb.adv = nil
@@ -497,6 +497,20 @@ function Backbone:advertise()
     end
 end
 
+function Backbone:kick()
+    if self.tickPending then return end
+    self.tickPending = true
+    local wait = 0.2
+    if self.advertDue and not self.recomputeDue then
+        wait = math.max(wait, 2 - (compat.now() - (self.lastAdvert or 0)))
+    end
+    self.node:after(wait, function()
+        self.tickPending = false
+        self:tick()
+        if self.recomputeDue or (self.advertDue and self.enabled) then self:kick() end
+    end, "bb-tick")
+end
+
 function Backbone:tick()
     if self.recomputeDue then
         self.recomputeDue = false
@@ -592,7 +606,10 @@ function Backbone:recompute()
         self.log.warn("realm unreachable: " .. r)
         self.node:emit("realm_down", r)
     end
-    if changed then self.advertDue = true end
+    if changed then
+        self.advertDue = true
+        self:kick()
+    end
     if gained then self:retryQueue() end
 end
 
@@ -664,7 +681,7 @@ function Backbone:addBridge(bcfg, fromConfig)
             if entry.removed then break end
             entry.restarts = entry.restarts + 1
             self.log.error("bridge " .. peer .. " stopped: " .. tostring(rok and "returned" or rerr))
-            sleep(5)
+            compat.sleep(5)
         end
     end, "bridge:" .. peer)
     if not fromConfig then
@@ -716,7 +733,7 @@ function Backbone:removeBridge(peer)
     self.cfg.bridges = keep
     self:saveBridgeConfig()
     self.recomputeDue = true
-    self.node:wake()
+    self:kick()
     return true
 end
 

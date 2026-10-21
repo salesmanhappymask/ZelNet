@@ -237,7 +237,9 @@ t.case("proximity unlock needs the admin to leave after a lock", function()
     con.latch = true
     con.locked = true
     con:onSensorResult(true, "Admin at 1.0")
-    t.eq(#env.queue(), 0, "latched: no unlock while standing there")
+    local unlocks = 0
+    for _, e in ipairs(env.queue()) do if e[1] == "zn_prox_unlock" then unlocks = unlocks + 1 end end
+    t.eq(unlocks, 0, "latched: no unlock while standing there")
     con:onSensorResult(false, "watching")
     t.eq(con.latch, false)
     con:onSensorResult(true, "Admin at 1.0")

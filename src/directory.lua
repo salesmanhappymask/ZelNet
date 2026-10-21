@@ -142,7 +142,7 @@ function Directory:adoptStorage()
         self.synced = self.synced or (not self.isMain and self.epoch ~= nil)
     end
     self.waitStorage = false
-    if self.isMain then self.pushDue = true end
+    if self.isMain then self:markPush() end
     self.log.info("directory moved to storage")
     return true
 end
@@ -163,13 +163,16 @@ end
 function Directory:changed()
     self.ver = self.ver + 1
     self:save()
-    if self.isMain then self.pushDue = true end
+    if self.isMain then self:markPush() end
 end
 
 function Directory:start()
     local n = self.node
     if self.isMain then
-        n:every(M.PUSH_DELAY, function() self:flushPush() end, "dir-push")
+        if self.pushDue then
+            self.pushDue = false
+            self:markPush()
+        end
     else
         n:after(3, function() self:register() end, "dir-register-first")
         n:every(M.REGISTER_INTERVAL, function() self:register() end, "dir-register")
@@ -177,6 +180,16 @@ function Directory:start()
             if r == self.mainRealm then self:register() end
         end)
     end
+end
+
+function Directory:markPush()
+    self.pushDue = true
+    if self.pushArmed or not self.node or not self.node.after then return end
+    self.pushArmed = true
+    self.node:after(M.PUSH_DELAY, function()
+        self.pushArmed = false
+        self:flushPush()
+    end, "dir-push")
 end
 
 function Directory:flushPush()

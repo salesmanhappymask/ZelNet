@@ -321,7 +321,7 @@ t.case("chatroom uses chat_get with since, posts and refreshes on notify and slo
             t.eq(last.body.since, 2)
             polls = h.count(calls, "chat_get")
         end,
-        11,
+        clientui.CHAT_POLL + 1,
         function()
             t.ok(h.count(calls, "chat_get") >= polls + 1, "slow poll")
             t.ok(h.count(calls, "chat_get") <= polls + 2, "poll is slow, not 4 per second")

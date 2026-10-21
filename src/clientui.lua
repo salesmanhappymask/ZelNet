@@ -10,7 +10,9 @@ local M = {}
 
 M.PORT = "tekmail"
 M.TIMEOUT = 35
-M.POLL = 10
+M.POLL = 120
+M.CHAT_POLL = 90
+M.MENU_TICK = 5
 M.HELLO_RETRY = 15
 M.TEXT_MAX = 1000
 M.CHAT_MAX = 200
@@ -165,7 +167,7 @@ end
 function App:wait(id, title, text)
     ui.busy(self.surf, title or "TekMail", (text or "Contacting the server...") .. " (Ctrl: cancel)")
     while not self:ready(id) do
-        local ev, a = os.pullEvent()
+        local ev, a = compat.pullUI()
         if ev == "key" and ui.isCtrl(a) then
             self:forget(id)
             return false
@@ -257,7 +259,7 @@ function App:splitMenu(o)
     local surf = self.surf
     local sel = o.selected or 1
     local offset = 0
-    local timer = os.startTimer(o.interval or 1)
+    local timer = os.startTimer(o.interval or M.MENU_TICK)
     while true do
         if o.update then
             local r = o.update()
@@ -318,7 +320,7 @@ function App:splitMenu(o)
         local hint = o.hint or ((o.back == false) and "Arrows, Enter" or "Ctrl: back")
         surf:field(ix, iy + ih - 1, leftW - 1, hint, c.dim, c.inset)
         surf:flush()
-        local ev, a, b, cc = os.pullEvent()
+        local ev, a, b, cc = compat.pullUI()
         local px, py, kind, btn = surf:pointer(ev, a, b, cc)
         local pick
         if px then
@@ -341,7 +343,7 @@ function App:splitMenu(o)
             local num = tonumber(a)
             if num and items[num] then pick = num end
         elseif ev == "timer" and a == timer then
-            timer = os.startTimer(o.interval or 1)
+            timer = os.startTimer(o.interval or M.MENU_TICK)
             if o.tick then o.tick() end
         elseif o.onEvent then
             local r = o.onEvent(ev, a, b, cc)
@@ -970,7 +972,8 @@ end
 function Feed:run(view)
     self.view = view
     self:fetch()
-    local timer = os.startTimer(M.POLL)
+    local poll = self.kind == "chat" and M.CHAT_POLL or M.POLL
+    local timer = os.startTimer(poll)
     view:setStatus("Loading...", self.app.surf.c.muted)
     local result = view:run({
         update = function()
@@ -982,7 +985,7 @@ function Feed:run(view)
         onOlder = function() self:older() end,
         onEvent = function(ev, a)
             if ev == "timer" and a == timer then
-                timer = os.startTimer(M.POLL)
+                timer = os.startTimer(poll)
                 self:fetch()
             elseif ev == "tm_notify" then
                 self:onNotes()

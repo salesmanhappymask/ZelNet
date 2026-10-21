@@ -464,6 +464,15 @@ function Computer:output()
     return table.concat(self.outputBuf)
 end
 
+function Computer:profile(on)
+    if on == false then
+        self.prof = nil
+        return
+    end
+    self.prof = { resumes = 0, instr = 0, peak = 0, coCreated = 0, timers = 0, traceStep = 200000, nextTrace = 200000 }
+    return self.prof
+end
+
 function Computer:clearOutput()
     self.outputBuf = {}
 end
@@ -473,6 +482,24 @@ function Computer:makeCoroutineLib()
     local hook = function()
         local n = c.instr + HOOK_STEP
         c.instr = n
+        local ps = c.prof
+        if ps and ps.samples then
+            local stack = {}
+            for lv = 2, 40 do
+                local info = getinfo(lv, "Sln")
+                if not info then break end
+                if info.source:sub(1, 1) ~= "@" then
+                    stack[#stack + 1] = tostring(info.name or "?") .. "@" .. tostring(info.currentline)
+                    if #stack >= ps.depth then break end
+                end
+            end
+            local key = table.concat(stack, " < ")
+            ps.samples[key] = (ps.samples[key] or 0) + 1
+        end
+        if ps and n > ps.peak and n >= ps.nextTrace then
+            ps.nextTrace = n + ps.traceStep
+            ps.peakTrace = debug.traceback("", 2)
+        end
         if n > c.budget then
             local info = getinfo(2, "S")
             if info and info.source:sub(1, 1) == "@" then return end
@@ -503,8 +530,20 @@ function Computer:makeCoroutineLib()
         if cur then owner[co] = owner[cur] or cur end
         return co
     end
+    local alive = setmetatable({}, { __mode = "k" })
+    self.liveCoroutines = function()
+        local n = 0
+        for co in pairs(alive) do if nativeStatus(co) ~= "dead" then n = n + 1 end end
+        return n
+    end
+    local function userCreate(f)
+        local co = create(f)
+        alive[co] = true
+        if c.prof then c.prof.coCreated = c.prof.coCreated + 1 end
+        return co
+    end
     local lib = {}
-    lib.create = create
+    lib.create = userCreate
     lib.resume = nativeResume
     lib.yield = nativeYield
     lib.status = nativeStatus
@@ -514,7 +553,7 @@ function Computer:makeCoroutineLib()
     end
     lib.wrap = function(f)
         if type(f) ~= "function" then error("bad argument #1 to 'wrap' (Lua function expected)", 2) end
-        local co = create(f)
+        local co = userCreate(f)
         return function(...)
             local r = pack(nativeResume(co, ...))
             if r[1] then return unpack(r, 2, r.n) end
@@ -566,6 +605,18 @@ function Computer:makeOs()
         if type(t) ~= "number" then fail("Expected number") end
         local token = c.nextTimer
         c.nextTimer = token + 1
+        if c.prof then
+            c.prof.timers = c.prof.timers + 1
+            local where = {}
+            for lv = 2, 6 do
+                local info = debug.getinfo(lv, "Sl")
+                if not info then break end
+                if info.source:sub(1, 1) ~= "@" then where[#where + 1] = tostring(info.currentline) end
+            end
+            local key = table.concat(where, "<")
+            c.prof.timerSites = c.prof.timerSites or {}
+            c.prof.timerSites[key] = (c.prof.timerSites[key] or 0) + 1
+        end
         c.timers[token] = t
         return token
     end)
@@ -1003,7 +1054,23 @@ function Computer:resume(ev)
     self.instr = 0
     self.softAborted = false
     self.hardAbort = false
+    local ps = self.prof
+    if ps then ps.nextTrace = math.max(ps.peak, ps.traceStep) end
     local r = pack(nativeResume(self.co, unpack(ev, 1, ev.n)))
+    if ps then
+        ps.resumes = ps.resumes + 1
+        ps.events = ps.events or {}
+        local en = tostring(ev[1])
+        ps.events[en] = (ps.events[en] or 0) + 1
+        ps.instr = ps.instr + self.instr
+        if self.instr > ps.peak then
+            ps.peak = self.instr
+            ps.peakEvent = tostring(ev[1])
+            ps.peakAt = self.world.tick
+            ps.bestTrace = ps.peakTrace
+        end
+        ps.peakTrace = nil
+    end
     if self.hardAbort then
         self:recordError("Too long without yielding")
         self.crashed = true

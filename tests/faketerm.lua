@@ -47,7 +47,10 @@ local function feedNext(filter)
     if filter == nil and pending == 0 and #M.script > 0 then
         local nextEv = M.script[1]
         if nextEv.wait then
-            if not M.waitUntil then M.waitUntil = os.clock() + nextEv.wait end
+            if not M.waitUntil then
+                M.waitUntil = os.clock() + nextEv.wait
+                os.startTimer(nextEv.wait)
+            end
             if os.clock() >= M.waitUntil then
                 table.remove(M.script, 1)
                 M.waitUntil = nil

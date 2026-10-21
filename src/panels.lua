@@ -10,7 +10,10 @@ M.SCALE = 0.5
 M.POCKET_MIN = 200000
 M.DRIVE_CACHE = 5
 M.HISTORY = 60
-M.HEAL_EVERY = 10
+M.HEAL_EVERY = 60
+M.COLLECT_EVERY = 2
+M.CONSOLE_EVERY = 2
+M.SETUP_EVERY = 5
 M.ROLES = {
     { role = "client", label = "Client" },
     { role = "router", label = "Router" },
@@ -192,27 +195,46 @@ function Panels:heal(force)
         self.healAt = now
         self.lastLocked = locked
         for _, s in pairs(self.surfs) do s:invalidate() end
+        return true
     end
+    return false
 end
 
 function Panels:tick()
-    local ok, err = pcall(self.collect, self)
-    if not ok then
-        local text = "display data: " .. tostring(err)
-        if self.errors.collect ~= text then
-            self.errors.collect = text
-            self.con.log.warn(text)
+    self.ticks = (self.ticks or 0) + 1
+    local n = self.ticks
+    local healed = self:heal()
+    if n == 1 or healed or n % M.COLLECT_EVERY == 0 then
+        local ok, err = pcall(self.collect, self)
+        if not ok then
+            local text = "display data: " .. tostring(err)
+            if self.errors.collect ~= text then
+                self.errors.collect = text
+                self.con.log.warn(text)
+            end
+        else
+            self.errors.collect = nil
         end
-    else
-        self.errors.collect = nil
     end
     self:sample()
-    self:heal()
-    self:drawAll()
+    local all = n == 1 or healed
+    local d = self:names()
+    if d.activity then self:guard("activity", self.drawActivity) end
+    if d.console and (all or n % M.CONSOLE_EVERY == 0) then self:guard("console", self.drawConsole) end
+    if d.setup and (all or n % M.SETUP_EVERY == 0) then self:guard("setup", self.drawSetup) end
 end
 
 function Panels:names()
     return M.displayNames(self.cfg)
+end
+
+function Panels:anyPresent()
+    local d = self:names()
+    for _, key in ipairs({ "activity", "console", "setup" }) do
+        local name = d[key]
+        if type(name) == "string" and peripheral.isPresent(name) then return true end
+    end
+    return false
 end
 
 function Panels:reset()
@@ -278,7 +300,7 @@ end
 
 function Panels:run()
     local due = 0
-    local timer = os.startTimer(0)
+    local timer = compat.quietTimer(0)
     while true do
         local ev, a, b, c = os.pullEvent()
         if ev == "monitor_touch" then
@@ -290,15 +312,18 @@ function Panels:run()
             self.drivesAt = -100
             if a == self:names().drive then self:guard("setup", self.drawSetup) end
         elseif ev == "zn_panel" then
+            due = 0
             self:guard("setup", self.drawSetup)
         end
         local now = compat.now()
-        if now >= due then
+        if now >= due and not self:anyPresent() then
+            due = math.huge
+        elseif now >= due then
             due = now + 1
             self:tick()
-            timer = os.startTimer(1)
+            timer = compat.quietTimer(1)
         elseif ev == "timer" and a == timer then
-            timer = os.startTimer(math.max(0.05, due - now))
+            timer = compat.quietTimer(math.max(0.05, due - now))
         end
     end
 end

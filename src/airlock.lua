@@ -472,17 +472,17 @@ function Airlock:step(timers, ev, a, b)
         if a == timers.discover then
             self:rbroadcast({ type = "alk_discover" })
             timers.left = timers.left - 1
-            timers.discover = timers.left > 0 and os.startTimer(M.DISCOVER_GAP) or nil
+            timers.discover = timers.left > 0 and compat.quietTimer(M.DISCOVER_GAP) or nil
         elseif a == timers.poll then
-            timers.poll = os.startTimer(M.POLL_INTERVAL)
+            timers.poll = compat.quietTimer(M.POLL_INTERVAL)
             self:poll()
         elseif a == timers.tick then
-            timers.tick = os.startTimer(M.TICK)
+            timers.tick = compat.quietTimer(M.TICK)
             self:tick()
         end
     elseif ev == "zn_airlock_discover" then
         timers.left = M.DISCOVER_COUNT
-        timers.discover = os.startTimer(0)
+        timers.discover = compat.quietTimer(0)
     elseif ev == "peripheral" then
         self:openRednet()
     end
@@ -492,8 +492,8 @@ function Airlock:run()
     self:openRednet()
     self:load()
     local timers = {
-        left = M.DISCOVER_COUNT, discover = os.startTimer(0),
-        poll = os.startTimer(M.POLL_INTERVAL), tick = os.startTimer(M.TICK),
+        left = M.DISCOVER_COUNT, discover = compat.quietTimer(0),
+        poll = compat.quietTimer(M.POLL_INTERVAL), tick = compat.quietTimer(M.TICK),
     }
     while true do
         local ev, a, b = os.pullEventRaw()

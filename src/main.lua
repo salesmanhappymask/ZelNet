@@ -314,7 +314,7 @@ function M.createPendingAdmin(ctx, admin)
                 ctx.log.warn("could not create admin account " .. tostring(admin.user) .. ": " .. tostring(err) .. "; create it under Accounts")
                 return
             end
-            sleep(M.ADMIN_RETRY)
+            compat.sleep(M.ADMIN_RETRY)
         end
     end, "setup-admin")
 end
@@ -396,7 +396,13 @@ function M.runDevice(cfg, opts)
     local app = opts.app or M.appFor(n, cfg)
     local ok, err = pcall(function() return n:loop(app) end)
     pcall(n.close, n)
-    if not ok then return M.crash(err, false) end
+    if not ok then
+        if tostring(err):find("Terminated", 1, true) then
+            say("ZelNet stopped.", colors.yellow)
+            return "terminated"
+        end
+        return M.crash(err, opts.restart ~= false)
+    end
     return "exit"
 end
 
@@ -530,7 +536,7 @@ function M.onDeviceUpdate(n, cfg, msg, state)
     n.log.warn("update " .. b.version .. " installed, rebooting")
     n:emit("update_installed", b.version)
     if state.opts.noReboot then return true end
-    sleep(state.opts.delay or M.UPDATE_DELAY)
+    compat.sleep(state.opts.delay or M.UPDATE_DELAY)
     os.reboot()
     return true
 end

@@ -1,4 +1,5 @@
 local need = ...
+local compat = need("compat")
 local util = need("util")
 
 local M = {}
@@ -114,6 +115,7 @@ end
 function Surface:flush(force)
     local t = self.target
     local mono = not self.isColor
+    local curFg, curBg, curX, curY
     for y = 1, self.h do
         local x = 1
         local base = (y - 1) * self.w
@@ -131,15 +133,18 @@ function Surface:flush(force)
                     self.pc[j], self.pf[j], self.pb[j] = self.fc[j], self.ff[j], self.fb[j]
                     x = x + 1
                 end
-                if mono then
-                    t.setBackgroundColor(colors.black)
-                    t.setTextColor(colors.white)
-                else
+                if mono then fg, bg = colors.white, colors.black end
+                if bg ~= curBg then
                     t.setBackgroundColor(bg)
-                    t.setTextColor(fg)
+                    curBg = bg
                 end
-                t.setCursorPos(startX, y)
+                if fg ~= curFg then
+                    t.setTextColor(fg)
+                    curFg = fg
+                end
+                if curX ~= startX or curY ~= y then t.setCursorPos(startX, y) end
                 t.write(table.concat(chars))
+                curX, curY = x, y
             else
                 x = x + 1
             end
@@ -393,7 +398,7 @@ function M.form(surf, opts)
         if errMsg then surf:field(ix, by - 1, iw, errMsg, page.c.bad, page.c.inset) end
         M.footerButtons(page, ix, by, iw, { label = opts.backLabel or "Back", action = "back" }, { label = opts.submit or "OK", action = "submit" })
         surf:flush()
-        local ev, a, b, c = os.pullEvent()
+        local ev, a, b, c = compat.pullUI()
         local action
         local px, py = surf:pointer(ev, a, b, c)
         if px then action = page:hit(px, py) end
@@ -484,7 +489,7 @@ function M.menu(surf, opts)
         end
         if opts.footer then surf:field(ix + 8, iy + ih - 1, iw - 16, opts.footer, page.c.muted, page.c.inset, "center") end
         surf:flush()
-        local ev, a, b, c = os.pullEvent()
+        local ev, a, b, c = compat.pullUI()
         local action
         local px, py, kind, btn = surf:pointer(ev, a, b, c)
         if px then
@@ -557,7 +562,7 @@ function M.message(surf, title, lines, opts)
         offset = page:list(ix, iy, iw - 1, ih - 2, flat, offset)
         M.footerButtons(page, ix, iy + ih - 1, iw, nil, { label = opts.button or "OK", action = "ok" })
         surf:flush()
-        local ev, a, b, c = os.pullEvent()
+        local ev, a, b, c = compat.pullUI()
         local px, py, kind, btn = surf:pointer(ev, a, b, c)
         if px then
             if kind == "scroll" then
@@ -583,7 +588,7 @@ function M.confirm(surf, title, text, opts)
         page:button(ix, iy + ih - 1, bw, 1, opts.no or "Cancel", page.c.div, page.c.text, "no")
         page:button(ix + iw - bw, iy + ih - 1, bw, 1, opts.yes or "Confirm", opts.danger and page.c.bad or page.c.brand, page.c.text, "yes")
         surf:flush()
-        local ev, a, b, c = os.pullEvent()
+        local ev, a, b, c = compat.pullUI()
         local px, py = surf:pointer(ev, a, b, c)
         if px then
             local act = page:hit(px, py)

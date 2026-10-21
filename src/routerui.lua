@@ -447,7 +447,7 @@ function View:run()
     local ok, err = pcall(function()
         while true do
             if self.dirty then self:draw() end
-            local ev, a, b, c = os.pullEvent()
+            local ev, a, b, c = compat.pullUI()
             if ev == "timer" and a == timer then
                 timer = os.startTimer(1)
                 self.dirty = true

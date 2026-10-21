@@ -18,6 +18,8 @@ M.INBOX_MAX = 64
 M.OUTQ_MAX = 64
 M.TRACE_MAX = 150
 M.TOWER_RECHECK = 30
+M.CLOCK_MIN = 0.05
+M.CLOCK_MAX = 30
 
 function M.new(cfg, opts)
     opts = opts or {}
@@ -78,6 +80,7 @@ function Node:trace(kind, text)
 end
 
 function Node:emit(event, ...)
+    if event == "connected" or event == "disconnected" then os.queueEvent("zn_state", event) end
     for _, fn in ipairs(self.listeners[event] or {}) do
         local ok, err = pcall(fn, ...)
         if not ok then self.log.warn("listener " .. event .. ": " .. tostring(err)) end
@@ -167,16 +170,30 @@ function Node:runScheduler()
     end
 end
 
-function Node:every(seconds, fn, name)
-    local t = { interval = seconds, next = compat.now() + seconds, fn = fn, name = name or "timer" }
+function Node:addTimer(t)
     self.timers[#self.timers + 1] = t
+    if self.clockDue and t.next < self.clockDue - 0.05 then
+        self.clockDue = nil
+        os.queueEvent("zn_clock")
+    end
     return t
 end
 
+function Node:every(seconds, fn, name)
+    return self:addTimer({ interval = seconds, next = compat.now() + seconds, fn = fn, name = name or "timer" })
+end
+
 function Node:after(seconds, fn, name)
-    local t = { interval = nil, next = compat.now() + seconds, fn = fn, name = name or "once" }
-    self.timers[#self.timers + 1] = t
-    return t
+    return self:addTimer({ interval = nil, next = compat.now() + seconds, fn = fn, name = name or "once" })
+end
+
+function Node:clockDelay()
+    local now = compat.now()
+    local due = now + M.CLOCK_MAX
+    for _, t in ipairs(self.timers) do
+        if t.next < due then due = t.next end
+    end
+    return math.max(M.CLOCK_MIN, due - now), due
 end
 
 function Node:runTimers()
@@ -219,13 +236,22 @@ function Node:rxTask()
 end
 
 function Node:clockTask()
-    local timer = os.startTimer(1)
+    local timer
+    local function arm()
+        local delay, due = self:clockDelay()
+        self.clockDue = due
+        timer = compat.quietTimer(delay)
+    end
+    arm()
     while true do
-        local ev, id = os.pullEvent("timer")
-        if id == timer then
-            timer = os.startTimer(1)
+        local ev, id = os.pullEventRaw()
+        if ev == "timer" and id == timer then
+            timer = nil
+            self.clockDue = nil
             self.inq.push({ tick = true })
             self:wake()
+        elseif ev == "zn_clock" then
+            arm()
         end
     end
 end
@@ -239,7 +265,7 @@ function Node:workerTask()
             local ok, err = pcall(self.processItem, self, item)
             if not ok then self.log.error("worker: " .. tostring(err)) end
             did = did + 1
-            if did % 8 == 0 then compat.yieldNow() end
+            if did % 4 == 0 then compat.yieldNow() end
         end
         while true do
             local pkt = self.outq.pop()
@@ -247,7 +273,7 @@ function Node:workerTask()
             local ok, err = pcall(self.transmitPacket, self, pkt)
             if not ok then self.log.error("send: " .. tostring(err)) end
             did = did + 1
-            if did % 8 == 0 then compat.yieldNow() end
+            if did % 4 == 0 then compat.yieldNow() end
         end
         self.wakePending = false
         if self.inq.size() == 0 and self.outq.size() == 0 then
@@ -259,6 +285,7 @@ end
 function Node:processItem(item)
     if item.tick then
         self:runTimers()
+        os.queueEvent("zn_clock")
         return
     end
     if item.rescan then
@@ -601,7 +628,7 @@ function Node:request(dst, port, body, timeout, opts)
         self.outq.push(pkt)
         self:count("sent")
         self:wake()
-        local timer = os.startTimer(timeout)
+        local timer = compat.quietTimer(timeout)
         while not p.done do
             local ev, a = os.pullEvent()
             if ev == "zn_reply" and a == pkt.id then
@@ -652,7 +679,7 @@ end
 function Node:receive(port, timeout)
     local box = self.inboxes[port]
     if box and box.size() > 0 then return box.pop() end
-    local timer = timeout and os.startTimer(timeout)
+    local timer = timeout and compat.quietTimer(timeout)
     while true do
         local ev, a = os.pullEvent()
         if ev == "zn_msg" and a == port then
@@ -782,7 +809,7 @@ function Node:deviceTimers()
     self:every(240, function()
         if self.connected then self:resubscribe() end
     end, "renew")
-    self:every(5, function()
+    self:every(10, function()
         if self.parent and self.waitq.size() > 0 and self.connected then self:flushWaiting() end
         local now = compat.now()
         for cid, r in compat.spairs(self.downRoutes) do

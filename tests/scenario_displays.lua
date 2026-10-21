@@ -92,7 +92,7 @@ activity.term:clear()
 console.term:clear()
 setup.term:clear()
 print("wiped:", filled(activity), filled(console), filled(setup))
-w:run(12)
+w:run(65)
 local after = { filled(activity), filled(console), filled(setup) }
 print("self heal:", before[1], after[1], before[2], after[2], before[3], after[3])
 print("self heal ok:", after[1] >= before[1] - 2 and after[2] >= before[2] - 2 and after[3] >= before[3] - 2)
