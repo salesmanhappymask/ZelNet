@@ -419,13 +419,14 @@ function Bridge:deliver(batch)
     return true
 end
 
-function Bridge:tryPull(tess, drive, dir)
+function Bridge:tryPull(tess, drive, dir, home)
     local ok, moved = rethrow(pcall(peripheral.call, tess, "pullItem", dir, 1, 1))
     if M.diskGone(drive) then return true end
     if not ok then return false, true end
     compat.sleep(self.settle)
     if M.diskGone(drive) then return true end
     if (tonumber(moved) or 0) > 0 then
+        if home then return false, false, true end
         self.badDirs[tess] = self.badDirs[tess] or {}
         self.badDirs[tess][dir] = true
         self:notice("pulled an item from the " .. dir .. " side of " .. tess .. " that was not the bridge disk; that side is skipped from now on")
@@ -440,7 +441,7 @@ function Bridge:eject(tess, drive, dirKey, full)
     local order, seen = {}, {}
     local bad = self.badDirs[tess] or {}
     local function add(d)
-        if d and not seen[d] and not bad[d] then
+        if d and not seen[d] and (d == dir or not bad[d]) then
             seen[d] = true
             order[#order + 1] = d
         end
@@ -457,10 +458,14 @@ function Bridge:eject(tess, drive, dirKey, full)
             hit = prev
             break
         end
-        local moved, failed = self:tryPull(tess, drive, d)
+        local moved, failed, bounced = self:tryPull(tess, drive, d, d == dir)
         if moved then
             hit = d
             break
+        end
+        if bounced then
+            self.stats.bounces = (self.stats.bounces or 0) + 1
+            return false, "the tesseract took the disk from " .. drive .. " and handed it back: the other side could not take it just now (its drive is busy, its chunk is not loaded, or a tesseract changed); trying again"
         end
         prev = not failed and d or nil
     end

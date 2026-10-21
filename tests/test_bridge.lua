@@ -121,6 +121,10 @@ local function newWorld()
                     return 0
                 end
                 if not src.disk then return 0 end
+                if (w.bounces or 0) > 0 then
+                    w.bounces = w.bounces - 1
+                    return 1
+                end
                 local dst = w.route(tt)
                 if not dst then return 0 end
                 w.move(src, dst)
@@ -661,6 +665,22 @@ t.case("own batch looping back is rejected with a frequency hint", function()
     t.eq(earth.b:status().rejected, 1)
     t.ok(earth.b:status().lastError:find("share a frequency", 1, true), earth.b:status().lastError)
     t.eq(w.files("drive_2")[bridge.FILE], text, "a rejected file must stay on the floppy")
+    w.clear()
+end)
+
+t.case("a tesseract that hands the disk back is retried, not blacklisted", function()
+    local w = standardWorld()
+    local earth = makeSide("EARTH", earthCfg(), "/earth/config")
+    local mars = makeSide("MARS", marsCfg(), "/mars/config")
+    w.bounces = 3
+    earth.b:enqueue(wire(1))
+    runWorld({ earth, mars }, function()
+        t.ok(waitFor(function() return #mars.got == 1 end, 200), "the packet never crossed after the bounces")
+    end)
+    t.eq(w.bounces, 0)
+    t.ok(not logHas(earth, "that was not the bridge disk"), "a bounce was taken for a wrong item")
+    t.eq(earth.bcfg.sendDir, earthCfg().sendDir, "the configured side must stay")
+    t.ok((earth.b.stats.bounces or 0) >= 1, "bounces were not counted")
     w.clear()
 end)
 

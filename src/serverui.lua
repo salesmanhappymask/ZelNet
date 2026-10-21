@@ -2159,16 +2159,17 @@ function Console:versionsHint()
     if not srv or not srv.networkVersions then return nil end
     local ok, list = pcall(srv.networkVersions, srv)
     if not ok or type(list) ~= "table" then return nil end
+    local want = list.target or version.full()
     local total, current = 0, 0
     for _, e in ipairs(list) do
         if e.prog then
             total = total + 1
-            if e.prog == version.full() then current = current + 1 end
+            if e.prog == want then current = current + 1 end
         end
         for _, d in ipairs(e.devices or {}) do
             if d.prog then
                 total = total + 1
-                if d.prog == version.full() then current = current + 1 end
+                if d.prog == want then current = current + 1 end
             end
         end
     end
@@ -2176,7 +2177,7 @@ function Console:versionsHint()
 end
 
 function M.versionRows(list, c, now)
-    local cur = version.full()
+    local cur = list.target or version.full()
     local rows = {}
     local function state(prog, rel, online)
         if not prog then return "no report", c.muted end
@@ -2210,7 +2211,14 @@ function Console:versionsPage()
     local srv = self.ctx.server
     return self:listView({
         title = self.cfg.role == "main" and "Network Versions" or "Versions",
-        subtitle = function() return "Newest: " .. version.label() .. "  " .. tostring(self:versionsHint() or "") end,
+        subtitle = function()
+            local newest = version.label()
+            if srv and srv.target then
+                local v, r = srv:target()
+                newest = version.labelOf(v, r)
+            end
+            return "Newest: " .. newest .. "  " .. tostring(self:versionsHint() or "")
+        end,
         rows = function()
             local ok, list = pcall(srv.networkVersions, srv)
             if not ok then return {} end

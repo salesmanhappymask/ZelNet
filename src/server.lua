@@ -445,7 +445,7 @@ function Server:onHelloMsg(msg)
     elseif fields.prog and not oldProg then
         self:scheduleReport()
     end
-    if fields.prog and fields.prog ~= version.full() then self:catchUp(dev) end
+    if fields.prog and fields.prog ~= (self:target()) then self:catchUp(dev) end
 end
 
 function Server:resolveName(name)
@@ -779,7 +779,8 @@ function Server:onVersionReport(src, b)
         end
     end
     self.realmVersions[realm] = entry
-    if entry.prog ~= version.full() and entry.pending ~= version.full() then self:catchUpRealm(realm) end
+    local want = self:target()
+    if entry.prog ~= want and entry.pending ~= want then self:catchUpRealm(realm) end
 end
 
 function Server:catchUpRealm(realm)
@@ -800,6 +801,8 @@ end
 
 function Server:networkVersions()
     local out = { { realm = self.realm, main = self.isMain, prog = version.full(), rel = version.release, t = 0, devices = {} } }
+    out.target, out.targetRel = self:target()
+    if out.target ~= version.full() then out[1].pending, out[1].pendingRel = out.target, out.targetRel end
     for _, d in ipairs(self.reg:list()) do
         local rec = self.reg.devices[d.name]
         out[1].devices[#out[1].devices + 1] = { name = d.name, role = d.role, prog = d.prog, rel = rec and rec.rel or nil, status = d.status }
@@ -881,6 +884,12 @@ function Server:prepareUpdate(text, ver)
         op = "offer", version = ver, rel = rel, size = #text, sha = sha, chunks = chunks,
         mac = crypto.mac(self.cfg.backboneKey, M.updateAad(ver, #text, sha)),
     }
+end
+
+function Server:target()
+    local u = self.update
+    if u and u.version ~= version.full() then return u.version, u.rel end
+    return version.full(), version.release
 end
 
 function Server:offerDevice(rec)
