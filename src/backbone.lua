@@ -737,6 +737,15 @@ function Backbone:removeBridge(peer)
     return true
 end
 
+function Backbone:resetBridge(peer)
+    local entry = self.bridgeSet[util.normRealm(peer) or ""]
+    if not entry or entry.removed then return nil, "no bridge to " .. tostring(peer) end
+    local ok, text = pcall(entry.obj.reset, entry.obj, nil, "manual")
+    if not ok then return nil, tostring(text) end
+    if self.enabled then pcall(entry.obj.enqueue, entry.obj, { hello = self:helloData() }) end
+    return true, text
+end
+
 function Backbone:bridges()
     local out = {}
     for _, peer in ipairs(util.sortedKeys(self.bridgeSet)) do out[#out + 1] = self.bridgeSet[peer].obj end

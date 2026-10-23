@@ -27,6 +27,9 @@ M.SWEEP_EVERY = 15
 M.BACKOFF_MAX = 30
 M.SEEN_TTL = 1800
 M.ADDR_MAX = 32
+M.STALL = 90
+M.MANUAL_LOST = 20
+M.HEAL_LOG_GAP = 600
 
 local VALID_DIR = {}
 for _, d in ipairs(M.DIRECTIONS) do VALID_DIR[d] = true end
@@ -269,6 +272,8 @@ function M.new(bcfg, ctx)
     self.state = "idle"
     self.sendDisk, self.recvDisk = false, false
     self.nextSweep = 0
+    self.progressAt = compat.now()
+    self.healLogAt = nil
     self.stopped = false
     self.running = false
     self:applyTuning()
@@ -409,6 +414,7 @@ function Bridge:deliver(batch)
         self.stats.duplicates = self.stats.duplicates + 1
         return false
     end
+    self.progressAt = compat.now()
     self.stats.received = self.stats.received + #batch.frames
     self.stats.bytesIn = self.stats.bytesIn + (batch.bytes or 0)
     self.stats.batchesIn = self.stats.batchesIn + 1
@@ -596,6 +602,7 @@ function Bridge:takeReturn(drive, diskId, now)
         if present then self:adoptFile(path, "send drive") end
         return
     end
+    self.progressAt = now
     self.stats.trips = self.stats.trips + 1
     self.stats.lastTrip = now - fl.at
     if not present then
@@ -651,6 +658,7 @@ function Bridge:sendBatch(drive, diskId, now)
         return false
     end
     self.inflight = { seq = self.seq, items = items, at = now, disk = diskId, bytes = #text }
+    self.progressAt = now
     self.sendDisk = false
     self:recover("send")
     return true
@@ -702,6 +710,59 @@ function Bridge:sweep(now)
     end
 end
 
+function Bridge:snapshot(now)
+    local c = self.cfg
+    local parts = { "state " .. tostring(self.state) }
+    local fault = self.faults.gear or self.faults.send or self.faults.recv or self.faults.disk
+    if fault then parts[#parts + 1] = "fault: " .. fault end
+    if self.inflight then parts[#parts + 1] = "disk out for " .. math.floor(now - self.inflight.at) .. "s" end
+    parts[#parts + 1] = "send drive " .. (M.diskIn(c.sendDrive) and "has a disk" or "empty")
+    parts[#parts + 1] = "receive drive " .. (M.diskIn(c.recvDrive) and "has a disk" or "empty")
+    parts[#parts + 1] = #self.queue .. " queued"
+    return table.concat(parts, ", ")
+end
+
+function Bridge:reset(now, why)
+    now = now or compat.now()
+    local text = self:snapshot(now)
+    local requeued = 0
+    local fl = self.inflight
+    local lostAfter = why == "manual" and M.MANUAL_LOST or M.STALL
+    if fl and not M.diskIn(self.cfg.sendDrive) and now - fl.at >= lostAfter then
+        self.inflight = nil
+        requeued = #fl.items
+        self:putBack(fl.items, false)
+        self.stats.resent = self.stats.resent + requeued
+    end
+    for _, side in ipairs({ "send", "recv", "disk" }) do self.faults[side] = nil end
+    self.retry = { send = { at = 0, delay = 0 }, recv = { at = 0, delay = 0 } }
+    self.full = {}
+    self.badDirs = {}
+    self.confirmed = {}
+    self.streak = { sendDir = 0, recvDir = 0 }
+    self.noDiskSince = nil
+    self.nextSweep = 0
+    self.progressAt = now
+    self.stats.heals = (self.stats.heals or 0) + 1
+    if requeued > 0 then text = text .. "; the disk never came back, so its " .. requeued .. " packet(s) go again" end
+    if why == "manual" or not self.healLogAt or now - self.healLogAt >= M.HEAL_LOG_GAP then
+        self.healLogAt = now
+        self:note("warn", (why == "manual" and "reset by the console: " or "no progress for " .. M.STALL .. "s, reset: ") .. text)
+    end
+    return text
+end
+
+function Bridge:watchdog(now)
+    local busy = #self.queue > 0 or self.inflight or self.faults.send or self.faults.recv or self.faults.disk
+    if not busy then
+        self.progressAt = now
+        return false
+    end
+    if now - self.progressAt < M.STALL then return false end
+    self:reset(now, "auto")
+    return true
+end
+
 function Bridge:refreshState()
     if self.faults.gear then return end
     if self.faults.send or self.faults.recv or self.faults.disk then
@@ -737,6 +798,8 @@ function Bridge:step()
     if not did then
         ok, res = rethrow(pcall(self.sweep, self, compat.now()))
         if not ok then self:setFault("recv", "sweep: " .. tostring(res), true) end
+        ok, res = rethrow(pcall(self.watchdog, self, compat.now()))
+        if not ok then self:note("warn", "watchdog: " .. tostring(res)) end
     end
     self:refreshState()
     return did
@@ -789,6 +852,8 @@ function Bridge:status()
         returned = s.returned,
         dropped = s.dropped,
         resent = s.resent,
+        heals = s.heals or 0,
+        bounces = s.bounces or 0,
         duplicates = s.duplicates,
         corrections = s.corrections,
         sendDir = self.cfg.sendDir,

@@ -1478,16 +1478,21 @@ function Console:bridgeMenu(b)
     local srv = self.ctx.server
     local choice = self:choose("Bridge " .. tostring(b.peer), tostring(b.state), {
         { label = "Details", value = "details" },
+        { label = "Recover", hint = "like a reboot, keeps packets", value = "recover" },
         { label = "Test the gear", value = "test" },
         { label = "Remove", value = "remove", color = self.surf.c.bad },
     })
     if choice == "details" then
         local lines = {}
-        for _, k in ipairs({ "state", "up", "queued", "inflight", "sent", "received", "trips", "errors", "lastError", "fault", "sendDisk", "recvDisk", "sendDir", "recvDir", "restarts" }) do
+        for _, k in ipairs({ "state", "up", "queued", "inflight", "sent", "received", "trips", "errors", "heals", "bounces", "lastError", "fault", "sendDisk", "recvDisk", "sendDir", "recvDir", "restarts" }) do
             if b[k] ~= nil then lines[#lines + 1] = k .. ": " .. tostring(b[k]) end
         end
         if b.lastTrip then lines[#lines + 1] = "lastTrip: " .. util.fmtFixed(b.lastTrip, 1) .. " s" end
         self:say("Bridge " .. tostring(b.peer), lines)
+    elseif choice == "recover" then
+        local ok, text = self:call(srv, "resetBridge", b.peer)
+        self:audit("bridge_recover", tostring(b.peer), ok and nil or text, ok)
+        self:result("Recover Bridge", ok, text, "The bridge to " .. tostring(b.peer) .. " starts fresh. Before: " .. tostring(text))
     elseif choice == "test" then
         local mod = self:bridgeModule()
         local bcfg = self:bridgeCfg(b.peer)

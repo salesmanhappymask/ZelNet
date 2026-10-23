@@ -125,6 +125,11 @@ local function newWorld()
                     w.bounces = w.bounces - 1
                     return 1
                 end
+                if w.lose then
+                    w.lose = false
+                    w.remove(src.name)
+                    return 1
+                end
                 local dst = w.route(tt)
                 if not dst then return 0 end
                 w.move(src, dst)
@@ -681,6 +686,38 @@ t.case("a tesseract that hands the disk back is retried, not blacklisted", funct
     t.ok(not logHas(earth, "that was not the bridge disk"), "a bounce was taken for a wrong item")
     t.eq(earth.bcfg.sendDir, earthCfg().sendDir, "the configured side must stay")
     t.ok((earth.b.stats.bounces or 0) >= 1, "bounces were not counted")
+    w.clear()
+end)
+
+t.case("a disk that never comes back is written off and its packets go again", function()
+    local w = standardWorld()
+    local earth = makeSide("EARTH", earthCfg(), "/earth/config")
+    local mars = makeSide("MARS", marsCfg(), "/mars/config")
+    w.lose = true
+    earth.b:enqueue(wire(1))
+    runWorld({ earth, mars }, function()
+        t.ok(waitFor(function() return earth.b:status().heals >= 1 end, bridge.STALL + 60), "the stalled trip was never written off")
+        t.eq(earth.b:status().inflight, 0, "the lost batch should be back in the queue")
+        t.ok(logHas(earth, "no progress for"), "no snapshot in the log")
+        w.insert("drive_0")
+        t.ok(waitFor(function() return #mars.got == 1 end, 120), "the packet never crossed after a new disk went in")
+    end)
+    t.eq(mars.got[1].id, "w1")
+    w.clear()
+end)
+
+t.case("recover from the console resets faults and keeps the queue", function()
+    local w = standardWorld()
+    local earth = makeSide("EARTH", earthCfg(), "/earth/config")
+    earth.b:setFault("send", "test fault", true)
+    earth.b.badDirs = { tesseract_0 = { north = true } }
+    earth.b:enqueue(wire(1))
+    local text = earth.b:reset(nil, "manual")
+    t.ok(text:find("test fault", 1, true), text)
+    t.eq(earth.b:status().fault, nil)
+    t.eq(next(earth.b.badDirs), nil)
+    t.eq(earth.b:status().queued, 1)
+    t.ok(logHas(earth, "reset by the console"), "manual reset not logged")
     w.clear()
 end)
 
