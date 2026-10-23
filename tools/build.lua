@@ -32,10 +32,22 @@ local function checksum(text, a, b)
     return a, b
 end
 
+local function longString(text)
+    local eq = ""
+    while text:find("]" .. eq .. "]", 1, true) do eq = eq .. "=" end
+    return "[" .. eq .. "[\n" .. text .. "]" .. eq .. "]"
+end
+
+local function moduleSource(name)
+    local prog = name:match("^prog_([%w_]+)$")
+    if prog then return "return " .. longString(readFile(root .. "/programs/" .. prog .. ".lua")) .. "\n" end
+    return readFile(root .. "/src/" .. name .. ".lua")
+end
+
 local sources = {}
 local a, b = 1, 0
 for _, name in ipairs(modules) do
-    local src = readFile(root .. "/src/" .. name .. ".lua")
+    local src = moduleSource(name)
     sources[name] = src
     a, b = checksum(name .. "\n" .. src, a, b)
 end

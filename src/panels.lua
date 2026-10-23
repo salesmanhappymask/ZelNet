@@ -18,9 +18,10 @@ M.ROLES = {
     { role = "client", label = "Client" },
     { role = "router", label = "Router" },
     { role = "endpoint", label = "Endpoint" },
+    { role = "airlock", label = "Airlock" },
     { role = "satellite", label = "Satellite" },
 }
-M.ROLE_TITLES = { client = "Client", router = "Router", endpoint = "Endpoint", satellite = "Satellite" }
+M.ROLE_TITLES = { client = "Client", router = "Router", endpoint = "Endpoint", satellite = "Satellite", airlock = "Airlock" }
 M.TABS = {
     { id = "overview", label = "Overview", bg = colors.blue, fg = colors.white },
     { id = "devices", label = "Devices", bg = colors.green, fg = colors.white },
@@ -1143,7 +1144,7 @@ function Panels:setup_home(page)
     header(page, "Device Setup")
     local y = self:drawMediaBox(page, 3) + 1
     local roles = self:roles()
-    local btnH = s.h >= 22 and 3 or 1
+    local btnH = s.h >= 22 and (#roles >= 5 and 2 or 3) or 1
     for _, r in ipairs(roles) do
         if y + btnH - 1 > s.h - 1 then break end
         page:button(2, y, s.w - 2, btnH, r.label, c.brand, c.text, "role:" .. r.role)
@@ -1209,7 +1210,7 @@ function Panels:setup_confirm(page)
     local info = self:setupDrive()
     local y = 3
     local lines = {
-        { M.ROLE_TITLES[st.role] .. " " .. st.name, c.ok },
+        { st.role == "airlock" and "Airlock program" or (M.ROLE_TITLES[st.role] .. " " .. st.name), c.ok },
         { "onto the " .. M.mediaTitle(info and info.kind) .. " in " .. tostring(info and info.name) .. ".", c.text },
     }
     if info and (info.files or 0) > 0 then lines[#lines + 1] = { "This erases the " .. info.files .. " file(s) on it.", c.warn } end
@@ -1257,6 +1258,14 @@ function Panels:setup_done(page)
         { "2. Put it in a disk drive next to the new computer.", c.text },
         { "3. Reboot that computer.", c.text },
     }
+    if st.role == "airlock" then
+        steps = {
+            { "Airlock disk ready.", c.ok },
+            { "1. Put it in a drive by the airlock computer.", c.text },
+            { "2. Reboot that computer.", c.text },
+            { "3. Pick door or oxygen sensor.", c.text },
+        }
+    end
     if (st.parts or 1) > 1 then steps[#steps + 1] = { "The installer asks for the other disks.", c.muted } end
     for _, l in ipairs(steps) do
         if y > s.h - 4 then break end
@@ -1306,7 +1315,14 @@ function Panels:setupAction(act)
         return
     end
     local role = act:match("^role:(.+)$")
-    if role then
+    if role == "airlock" then
+        self.st = { screen = "confirm", role = role, name = "airlock" }
+        local merr = self:mediaProblem()
+        if merr then
+            self.st = { screen = "home", err = merr }
+        end
+        return
+    elseif role then
         self.st = { screen = "name", role = role, name = self:defaultName(role) }
         return
     end
@@ -1323,7 +1339,7 @@ function Panels:setupAction(act)
         return
     end
     if act == "back" then
-        if st.screen == "confirm" then
+        if st.screen == "confirm" and st.role ~= "airlock" then
             st.screen = "name"
             st.err = nil
         else
@@ -1390,6 +1406,21 @@ function Panels:writeJob(role, name, info)
     local st = self.st
     local srv = self.con.ctx.server
     local prov = need("provision")
+    if role == "airlock" then
+        st.note = "Writing the airlock program"
+        local ok, res = prov.writeAirlock(info.name, { wipe = true })
+        self.con:audit("provision", "airlock", ok and (info.name .. " (setup monitor)") or tostring(res), ok and true or false)
+        if not ok then
+            st.screen = "error"
+            st.err = "Could not write: " .. tostring(res)
+            return
+        end
+        st.parts = 1
+        st.drive = info.name
+        self.drivesAt = -100
+        st.screen = "done"
+        return
+    end
     st.note = "Creating keys"
     local dcfg, err = srv:provision(role, name)
     if type(dcfg) ~= "table" then

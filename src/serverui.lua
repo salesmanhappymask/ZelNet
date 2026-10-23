@@ -21,7 +21,7 @@ M.MAX_FAILS = 3
 M.FAIL_HOLD = 10
 M.GUIDE_WAIT = 60
 M.VIEW_TITLES = { realms = "Realms", routes = "Routes", neighbors = "Neighbors", links = "Links" }
-M.ROLE_TITLES = { client = "Client", router = "Router", endpoint = "Endpoint", satellite = "Satellite server", main = "Main server" }
+M.ROLE_TITLES = { client = "Client", router = "Router", endpoint = "Endpoint", satellite = "Satellite server", main = "Main server", airlock = "Airlock" }
 M.DIRECTIONS = { "north", "south", "east", "west", "up", "down" }
 M.INPUT_EVENTS = { key = true, char = true, mouse_click = true, mouse_scroll = true, mouse_drag = true, paste = true }
 M.STORAGE_ROLES = { "accounts", "mail", "chat", "audit", "system" }
@@ -1060,10 +1060,12 @@ function Console:newDevice()
         { label = "Client", hint = "TekMail", value = "client" },
         { label = "Router", hint = "relay", value = "router" },
         { label = "Endpoint", hint = "programs", value = "endpoint" },
+        { label = "Airlock", hint = "door or O2 sensor", value = "airlock" },
     }
     if self.cfg.role == "main" then roles[#roles + 1] = { label = "Satellite server", hint = "new realm", value = "satellite" } end
     local role = self:choose("New Device", "What should the new computer be?", roles)
     if not role then return nil end
+    if role == "airlock" then return self:newAirlock() end
     local isSat = role == "satellite"
     local r = ui.form(self.surf, {
         title = "New " .. M.ROLE_TITLES[role],
@@ -1093,6 +1095,31 @@ function Console:newDevice()
     if isSat then intro = intro .. " On floppy disks the satellite program needs 2 disks; a pocket computer holds it all." end
     if not ui.confirm(self.surf, "New Device", intro, { yes = "Write" }) then return nil end
     return self:writeDevice(role, name, drive, prov)
+end
+
+function Console:newAirlock()
+    local prov = self:provisionModule()
+    if not prov or not prov.writeAirlock then
+        self:say("New Airlock", "The provisioning module is missing from this program copy.", self.surf.c.bad)
+        return nil
+    end
+    local drive = self:pickDrive("Disk for an airlock", prov.excludeFor(self.cfg, true))
+    if not drive then return nil end
+    if not ui.confirm(self.surf, "New Airlock", "Write the airlock program to the disk in " .. drive.name .. "? The airlock computer asks whether it is a door or an oxygen sensor the first time it starts.", { yes = "Write" }) then return nil end
+    self.provBusy = "terminal"
+    local wok, res = self:busy("New Airlock", "Writing the airlock program...", function() return prov.writeAirlock(drive.name, { wipe = drive.wipe }) end)
+    self.provBusy = nil
+    self:audit("provision", "airlock", wok and drive.name or tostring(res), wok and true or false)
+    if not wok then return self:result("New Airlock", false, "Could not write the disk: " .. tostring(res)) end
+    local lines = {
+        { text = "The airlock disk is ready.", color = self.surf.c.ok },
+        "1. Put it in a disk drive next to the airlock computer and reboot that computer.",
+        "2. Answer its setup: door or oxygen sensor, a name like dock-A, and its sides.",
+        "3. Take the disk out. The airlock finds this server by itself.",
+    }
+    if self.cfg.airlocks == false then lines[#lines + 1] = { text = "Airlock control is off on this server: turn it on under Settings, then reboot.", color = self.surf.c.warn } end
+    self:say("New Airlock", lines)
+    return nil
 end
 
 function Console:writeDevice(role, name, drive, prov)

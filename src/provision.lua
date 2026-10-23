@@ -7,14 +7,14 @@ local version = need("version")
 local M = {}
 
 M.FILES = { program = "zelnet", packed = "zelnet.z", config = "zelnet.cfg", installer = "startup" }
-M.OURS = { zelnet = true, ["zelnet.z"] = true, ["zelnet.cfg"] = true, startup = true, ["zelnet.tmp"] = true }
+M.OURS = { zelnet = true, ["zelnet.z"] = true, ["zelnet.cfg"] = true, startup = true, ["zelnet.tmp"] = true, airlock = true }
 M.PART_SIZE = 118000
 M.MARGIN = 1024
 M.MAX_DIST = 728999
 M.TRIES = 16
 M.SERVER_ONLY = {
     storage = true, registry = true, directory = true, bridge = true, backbone = true,
-    server = true, tekmail = true, airlock = true, serverui = true, panels = true, updater = true,
+    server = true, tekmail = true, airlock = true, serverui = true, panels = true, updater = true, prog_airlock = true,
 }
 M.MAGIC = "ZNPK1"
 
@@ -641,6 +641,84 @@ function M.writePart(driveName, plan, i, opts)
     if not wok then return nil, "write failed: " .. tostring(werr) end
     pcall(peripheral.call, driveName, "setDiskLabel", M.labelFor(plan.cfg, i, #set.bodies))
     return true, { bytes = #text, foreign = #foreign }
+end
+
+local AIRLOCK_INSTALLER = [==[
+local here = ""
+if shell and shell.getRunningProgram then here = fs.getDir(shell.getRunningProgram()) end
+local function readAll(p)
+if not fs.exists(p) or fs.isDir(p) then return nil end
+local h = fs.open(p, "r")
+if not h then return nil end
+local s = h.readAll()
+h.close()
+return s
+end
+local function say(s, c)
+if c and term.isColor and term.isColor() then term.setTextColor(c) end
+print(s)
+if term.isColor and term.isColor() then term.setTextColor(colors.white) end
+end
+if here == "" then
+say("This pocket computer carries the ZelNet airlock program.", colors.yellow)
+say("Put it in a disk drive next to the airlock computer and reboot that computer.")
+return
+end
+if fs.exists("/.zelnet/config") then
+say("This computer runs ZelNet. The airlock program was not installed.", colors.yellow)
+if shell and fs.exists("/zelnet") then shell.run("/zelnet") end
+return
+end
+local src = readAll("/" .. here .. "/airlock")
+if not src then
+say("The airlock program is missing from this disk.", colors.red)
+return
+end
+if readAll("/startup") ~= src then
+if fs.exists("/startup") then
+if fs.exists("/startup.old") then fs.delete("/startup.old") end
+fs.move("/startup", "/startup.old")
+say("Your old /startup is now /startup.old")
+end
+local h = fs.open("/startup", "w")
+if not h then
+say("Cannot write /startup. Is the computer full?", colors.red)
+return
+end
+h.write(src)
+h.close()
+if os.getComputerLabel and not os.getComputerLabel() and os.setComputerLabel then pcall(os.setComputerLabel, "airlock") end
+say("Airlock program installed. Take the disk out of the drive.", colors.lime)
+sleep(2)
+end
+shell.run("/startup")
+]==]
+
+function M.airlockProgram()
+    local ok, text = pcall(need, "prog_airlock")
+    if ok and type(text) == "string" then return text end
+    return nil
+end
+
+function M.writeAirlock(driveName, opts)
+    opts = opts or {}
+    local program = opts.program or M.airlockProgram()
+    if not program then return nil, "the airlock program is missing from this program copy" end
+    local mount, err = checkDrive(driveName)
+    if not mount then return nil, err end
+    local ok, cerr = clearDisk(mount, opts.wipe)
+    if not ok then return nil, cerr end
+    if freeOf(mount) < #program + #AIRLOCK_INSTALLER + M.MARGIN then return nil, "not enough space on the disk in " .. driveName end
+    local files = { { "airlock", program }, { M.FILES.installer, AIRLOCK_INSTALLER } }
+    for _, f in ipairs(files) do
+        local wok, werr = writeText(mount .. "/" .. f[1], f[2])
+        if not wok then
+            for _, g in ipairs(files) do pcall(fs.delete, mount .. "/" .. g[1]) end
+            return nil, "write failed: " .. tostring(werr)
+        end
+    end
+    pcall(peripheral.call, driveName, "setDiskLabel", "ZelNet airlock")
+    return true, { parts = 1, bytes = #program + #AIRLOCK_INSTALLER, mount = mount }
 end
 
 local INSTALLER = [==[

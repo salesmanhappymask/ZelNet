@@ -79,6 +79,16 @@ A complete BitNet tower attached to a server or router extends that node's range
 
 Put a pocket computer in the server's setup drive, unlock the console, and on the setup monitor tap the role, then **Next** and **Write** (the name is filled in for you). Put the pocket computer into a disk drive next to the new computer and reboot that computer. The device finds the network by itself and connects to the server that made its install. Running a pocket computer by itself does not install anything; it has to sit in a drive.
 
+### 4. Airlocks
+
+An airlock computer needs a modem (wireless, or wired on the server's cable) and redstone from an oxygen detector. Doors also drive the airlock block from a second side. Put a pocket computer in the setup drive and tap **Airlock** on the setup monitor (or use **Devices, New, Airlock** on the console). Put the pocket in a drive next to the airlock computer and reboot it. The first start asks:
+
+* **Door or oxygen sensor.** Doors open and seal; a sensor only reports the air in the chamber.
+* **A name.** Doors of one airlock share a name ending in a letter (`dock-A`, `dock-B`); the chamber sensor ends in `-C` (`dock-C`).
+* **The detector side, the door side and the monitor width.**
+
+Press **S** on the airlock computer at any time to change these; every question starts on the current answer. The airlock finds the server by itself and links to a rebuilt server too. The server seals every door of an airlock when its sensor or a door loses air, and shows them under **Airlocks** on the console. Airlock control must be on (**Settings, Airlock control**). The program is `programs/airlock.lua` if you want to install it by hand.
+
 ## Getting the program into the game
 
 ZelNet installs and updates straight from this repository. The program is `dist/zelnet` (about 220 KB). It stays packed on disk and unpacks itself in memory each time it starts, which leaves room on the computer for an update to be swapped in safely.
