@@ -851,6 +851,10 @@ function Computer:makeHttpApi()
         local hcfg = c.world.config.http
         local ok, err = M.httpAllowed(hcfg.whitelist, url)
         if not ok then error(err, 2) end
+        if post ~= nil then
+            hcfg.posts = hcfg.posts or {}
+            hcfg.posts[#hcfg.posts + 1] = { url = url, body = post }
+        end
         c.world:schedule(hcfg.delay or 10, function()
             local text = (hcfg.files or {})[url]
             if type(text) == "string" then

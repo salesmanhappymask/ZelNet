@@ -430,6 +430,114 @@ t.case("a door interlocked by its sensor stays sealed and seals its zone partner
     t.eq(cmd[#cmd].force, true, "and tells the door to override its interlock")
 end)
 
+t.case("event log records reports, commands with reasons and area changes; bundle includes door logs", function()
+    resetNet()
+    local al = mk()
+    local ids = athena(al)
+    al:handleMessage(ids["Athena6-C"], { type = "alk_status", oxygenated = false })
+    tick(al, airlock.LOSS_CONFIRM)
+    local text = table.concat(al.events, "\n")
+    t.ok(text:find("rx Athena6-C status o2=false", 1, true), "report logged")
+    t.ok(text:find("cmd Athena6-A seal (zone has no oxygen", 1, true), "command logged with its reason")
+    t.ok(text:find("area zone Athena6 holding -> pending", 1, true) and text:find("area zone Athena6 pending -> lost", 1, true), "area changes logged")
+    resetNet()
+    t.eq(al:requestLogs(), 24)
+    t.eq(#sentTo(ids["Athena6-A"], "alk_dump"), 1)
+    local nonce = sentTo(ids["Athena6-A"], "alk_dump")[1].nonce
+    t.ok(al:handleMessage(ids["Athena6-A"], { type = "alk_log", nonce = nonce, text = "  12.0 boot Athena6-A" }))
+    t.ok(not al:handleMessage(ids["Athena6-B"], { type = "alk_log", nonce = "wrong", text = "x" }), "stale dump ignored")
+    local b = al:logBundle("server MARS #4 r40")
+    t.ok(b:find("ZELNET AIRLOCK LOG BUNDLE", 1, true))
+    t.ok(b:find("Athena6-A", 1, true) and b:find("zone has no oxygen", 1, true), "airlock table shows why each door is sealed")
+    t.ok(b:find("== Athena6-A (#" .. ids["Athena6-A"] .. ") local log", 1, true) and b:find("boot Athena6-A", 1, true), "door log included")
+    t.ok(b:find("Athena6-B (#" .. ids["Athena6-B"] .. ") sent no log", 1, true), "missing door log noted")
+end)
+
+t.case("lockdown reaches every door, including doors that were already sealed", function()
+    resetNet()
+    local al = mk()
+    local ids = athena(al)
+    al:handleMessage(ids["Athena6-C"], { type = "alk_status", oxygenated = false })
+    tick(al, airlock.LOSS_CONFIRM)
+    resetNet()
+    al:lockdown("Athena", "admin")
+    local c = sentTo(ids["Athena6-A"], "alk_cmd")
+    t.eq(#c, 1, "already sealed door still told")
+    t.eq(c[1].lockdown, true)
+    t.eq(sentTo(ids["Athena5-A"], "alk_cmd")[1].lockdown, true)
+    al:handleMessage(ids["Athena5-A"], { type = "alk_hello", oxygenated = true, sealed = true })
+    local acks = sentTo(ids["Athena5-A"], "alk_ack")
+    t.eq(acks[#acks].lockdown, true, "heartbeat answers carry the lockdown")
+    resetNet()
+    al:releaseContainment("Athena", "admin")
+    t.eq(sentTo(ids["Athena6-A"], "alk_cmd")[1].lockdown, nil, "release clears it on every door")
+end)
+
+t.case("signed updates: one door at a time, served in chunks, never during lockdown", function()
+    resetNet()
+    local crypto = need("crypto")
+    local key = crypto.newKey()
+    local al = mk(nil, { airlockKey = key })
+    local prog = al:program()
+    t.ok(prog and prog.ver and prog.chunks >= 1, "server knows the airlock program")
+    local ids = athena(al)
+    resetNet()
+    al:handleMessage(ids["Athena-A"], { type = "alk_hello", oxygenated = true, sealed = false, ver = "old", keyed = true })
+    local offer = sentTo(ids["Athena-A"], "alk_update")[1]
+    t.ok(offer, "out of date door gets an offer")
+    t.eq(offer.mac, crypto.hmac(key, "alk_update|" .. offer.ver .. "|" .. offer.size .. "|" .. table.concat(offer.hashes, ",")))
+    t.eq(#offer.hashes, offer.chunks)
+    t.ok(offer.ver ~= "dev" and #offer.ver == 8, "the build stamps a version into the program")
+    al:handleMessage(ids["Athena-B"], { type = "alk_hello", oxygenated = true, sealed = false, ver = "old", keyed = true })
+    t.eq(#sentTo(ids["Athena-B"], "alk_update"), 0, "only one door updates at a time")
+    al:handleMessage(ids["Athena2-A"], { type = "alk_hello", oxygenated = true, sealed = false, ver = "old" })
+    t.eq(#sentTo(ids["Athena2-A"], "alk_update"), 0, "doors without the key get no offer")
+    t.ok(al:handleMessage(ids["Athena-A"], { type = "alk_get", ver = offer.ver, i = 1 }))
+    local ch = sentTo(ids["Athena-A"], "alk_chunk")[1]
+    t.eq(ch.data, prog.text:sub(1, airlock.CHUNK))
+    t.ok(not al:handleMessage(ids["Athena-A"], { type = "alk_get", ver = offer.ver, i = 999 }))
+    local parts = {}
+    for i = 1, offer.chunks do
+        al:handleMessage(ids["Athena-A"], { type = "alk_get", ver = offer.ver, i = i })
+        local got = sentTo(ids["Athena-A"], "alk_chunk")
+        parts[i] = got[#got].data
+    end
+    t.eq(table.concat(parts), prog.text, "chunks rebuild the program")
+    t.eq(crypto.sha256(parts[1]), offer.hashes[1])
+    al:handleMessage(ids["Athena-A"], { type = "alk_hello", oxygenated = true, sealed = false, ver = prog.ver, keyed = true })
+    t.eq(al.updating, nil, "done once the door reports the new version")
+    al:handleMessage(ids["Athena-B"], { type = "alk_hello", oxygenated = true, sealed = false, ver = "old", keyed = true })
+    t.eq(#sentTo(ids["Athena-B"], "alk_update"), 1, "next door goes after the first finished")
+    al.updating = nil
+    al:lockdown("Athena", "admin")
+    resetNet()
+    al:handleMessage(ids["Athena3-A"], { type = "alk_hello", oxygenated = true, sealed = true, ver = "old", keyed = true })
+    t.eq(#sentTo(ids["Athena3-A"], "alk_update"), 0, "no updates during lockdown")
+end)
+
+t.case("upload falls back to dpaste and reports both refusals", function()
+    local posts = {}
+    local answers = {}
+    _G.http = { post = function(url, body)
+        posts[#posts + 1] = { url = url, body = body }
+        local a = answers[url]
+        if not a then return nil end
+        return { readAll = function() return a end, close = function() end }
+    end }
+    _G.textutils = _G.textutils or {}
+    _G.textutils.urlEncode = _G.textutils.urlEncode or function(s) return s end
+    answers["https://paste.rs/"] = "https://paste.rs/Ab3"
+    t.eq(airlock.upload("hello"), "https://paste.rs/Ab3")
+    answers["https://paste.rs/"] = nil
+    answers["https://dpaste.com/api/v2/"] = "https://dpaste.com/XYZ\n"
+    t.eq(airlock.upload("hello"), "https://dpaste.com/XYZ.txt")
+    answers["https://dpaste.com/api/v2/"] = nil
+    local url, err = airlock.upload("hello")
+    t.eq(url, nil)
+    t.ok(err:find("paste.rs", 1, true) and err:find("dpaste.com", 1, true))
+    _G.http = nil
+end)
+
 t.case("manual modes, locking, rename and remove", function()
     resetNet()
     local al, ctx = mk()

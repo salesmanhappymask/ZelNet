@@ -1,3 +1,4 @@
+local VERSION = "dev"
 local STATE_FILE = "/airlock.dat"
 local SILENT_AFTER = 960
 local SEARCH_EVERY = 60
@@ -9,6 +10,14 @@ local HEARTBEAT = 30
 local RETRY_EVERY = 1
 local RETRY_MAX = 5
 local PEER_CONFIRM = 3
+local LOG_FILE = "/airlock.log"
+local LOG_CAP = 16000
+local LOG_KEEP = 150
+local DUMP_MAX = 5500
+local KEY_FILE = "/airlock.key"
+local CHUNK_WAIT = 3
+local CHUNK_TRIES = 5
+local FLASH = 0.5
 
 local SIDES = { "top", "bottom", "left", "right", "front", "back" }
 
@@ -35,6 +44,8 @@ local state = {
     locked = false,
     sealed = false,
     oxygenated = true,
+    lightSide = "none",
+    lockdown = false,
 }
 
 local monitor = nil
@@ -42,6 +53,139 @@ local lastHeard = nil
 local unsealedAt = nil
 local peer = nil
 local pending = nil
+local upd = nil
+local flashOn = false
+local KEY = nil
+
+local MOD = 4294967296
+local function n32(x)
+    x = x % MOD
+    if x < 0 then x = x + MOD end
+    return x
+end
+local function band(a, c) return n32(bit.band(n32(a), n32(c))) end
+local function bxor(a, c) return n32(bit.bxor(n32(a), n32(c))) end
+local function bnot(a) return MOD - 1 - n32(a) end
+local function rshift(a, n) return math.floor(n32(a) / (2 ^ n)) end
+local function rrot(x, n)
+    x = n32(x)
+    return (math.floor(x / (2 ^ n)) + (x * (2 ^ (32 - n))) % MOD) % MOD
+end
+local K = {
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2,
+}
+local function hex8(n)
+    return string.format("%08x", n32(n))
+end
+local function sha256(msg)
+    local h = { 0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19 }
+    local bits = #msg * 8
+    local pad = 64 - ((#msg + 9) % 64)
+    if pad == 64 then pad = 0 end
+    local hi, lo = math.floor(bits / MOD), bits % MOD
+    msg = msg .. "\128" .. string.rep("\0", pad)
+        .. string.char(band(rshift(hi, 24), 255), band(rshift(hi, 16), 255), band(rshift(hi, 8), 255), band(hi, 255))
+        .. string.char(band(rshift(lo, 24), 255), band(rshift(lo, 16), 255), band(rshift(lo, 8), 255), band(lo, 255))
+    local w = {}
+    for chunk = 1, #msg, 64 do
+        for i = 0, 15 do
+            local b1, b2, b3, b4 = msg:byte(chunk + i * 4, chunk + i * 4 + 3)
+            w[i + 1] = ((b1 * 256 + b2) * 256 + b3) * 256 + b4
+        end
+        for i = 17, 64 do
+            local x, y = w[i - 15], w[i - 2]
+            local s0 = bxor(bxor(rrot(x, 7), rrot(x, 18)), rshift(x, 3))
+            local s1 = bxor(bxor(rrot(y, 17), rrot(y, 19)), rshift(y, 10))
+            w[i] = (w[i - 16] + s0 + w[i - 7] + s1) % MOD
+        end
+        local a, b, c, d, e, f, g, hh = h[1], h[2], h[3], h[4], h[5], h[6], h[7], h[8]
+        for i = 1, 64 do
+            local S1 = bxor(bxor(rrot(e, 6), rrot(e, 11)), rrot(e, 25))
+            local ch = bxor(band(e, f), band(bnot(e), g))
+            local t1 = (hh + S1 + ch + K[i] + w[i]) % MOD
+            local S0 = bxor(bxor(rrot(a, 2), rrot(a, 13)), rrot(a, 22))
+            local mj = bxor(bxor(band(a, b), band(a, c)), band(b, c))
+            local t2 = (S0 + mj) % MOD
+            hh, g, f, e, d, c, b, a = g, f, e, (d + t1) % MOD, c, b, a, (t1 + t2) % MOD
+        end
+        h[1], h[2], h[3], h[4] = (h[1] + a) % MOD, (h[2] + b) % MOD, (h[3] + c) % MOD, (h[4] + d) % MOD
+        h[5], h[6], h[7], h[8] = (h[5] + e) % MOD, (h[6] + f) % MOD, (h[7] + g) % MOD, (h[8] + hh) % MOD
+    end
+    return hex8(h[1]) .. hex8(h[2]) .. hex8(h[3]) .. hex8(h[4]) .. hex8(h[5]) .. hex8(h[6]) .. hex8(h[7]) .. hex8(h[8])
+end
+local function fromHex(s)
+    if type(s) ~= "string" or #s % 2 ~= 0 or s:find("[^%x]") then return nil end
+    return (s:gsub("%x%x", function(x) return string.char(tonumber(x, 16)) end))
+end
+local function hmac(keyHex, msg)
+    local key = fromHex(keyHex)
+    if not key then return nil end
+    if #key > 64 then key = fromHex(sha256(key)) end
+    key = key .. string.rep("\0", 64 - #key)
+    local ipad, opad = {}, {}
+    for i = 1, 64 do
+        local kb = key:byte(i)
+        ipad[i] = string.char(bxor(kb, 0x36))
+        opad[i] = string.char(bxor(kb, 0x5c))
+    end
+    return sha256(table.concat(opad) .. fromHex(sha256(table.concat(ipad) .. msg)))
+end
+
+local logLines = {}
+local function log(text)
+    local day, t = 0, 0
+    pcall(function() day = os.day() or 0 end)
+    pcall(function() t = os.time() or 0 end)
+    local hr = math.floor(t)
+    local line = string.format("d%d %02d:%02d %7.1f %s", day, hr, math.floor((t - hr) * 60), os.clock(), tostring(text))
+    logLines[#logLines + 1] = line
+    if #logLines > LOG_KEEP then table.remove(logLines, 1) end
+    pcall(function()
+        if fs.exists(LOG_FILE) and fs.getSize(LOG_FILE) > LOG_CAP then
+            if fs.exists(LOG_FILE .. ".old") then fs.delete(LOG_FILE .. ".old") end
+            fs.move(LOG_FILE, LOG_FILE .. ".old")
+        end
+        local h = fs.open(LOG_FILE, fs.exists(LOG_FILE) and "a" or "w")
+        if h then
+            h.write(line .. "\n")
+            h.close()
+        end
+    end)
+end
+
+local function readText(path)
+    if not fs.exists(path) or fs.isDir(path) then return nil end
+    local h = fs.open(path, "r")
+    if not h then return nil end
+    local t = h.readAll()
+    h.close()
+    return t
+end
+
+local function logTail()
+    local text = (readText(LOG_FILE .. ".old") or "") .. (readText(LOG_FILE) or "")
+    if #text > DUMP_MAX then text = text:sub(-DUMP_MAX) end
+    return text
+end
+
+local function programPath()
+    local p = shell and shell.getRunningProgram and shell.getRunningProgram()
+    if type(p) == "string" and p ~= "" then return "/" .. p end
+    return "/startup"
+end
+
+local function loadKey()
+    local k = readText(KEY_FILE)
+    k = k and k:match("^%s*(%x+)%s*$")
+    if k and #k >= 32 then KEY = k:lower() else KEY = nil end
+end
 
 local function trim(s)
     s = tostring(s or "")
@@ -175,6 +319,19 @@ local function centerText(w, s)
     return string.rep(" ", math.max(0, pad)) .. s
 end
 
+local flashTimer = nil
+
+local function flashing()
+    if state.lockdown then return true end
+    if isSensor() then return false end
+    return state.locked == true or state.sealed == true
+end
+
+local function setLight()
+    local side = state.lightSide
+    if type(side) == "string" and side ~= "none" then pcall(redstone.setOutput, side, flashing() and flashOn) end
+end
+
 local function paint(dev, isTerm)
     local ok, w, h = pcall(dev.getSize)
     if not ok then return end
@@ -208,7 +365,10 @@ local function paint(dev, isTerm)
 
     local bannerCol = danger and C_ERR or C_OK
     local bannerTxt
-    if locked then
+    if state.lockdown then
+        bannerCol = C_ERR
+        bannerTxt = compact and "LOCKDOWN" or "STATION LOCKDOWN"
+    elseif locked then
         bannerCol = C_LOCK
         bannerTxt = compact and "LOCKED" or "LOCKED BY CONTROL"
     elseif compact then
@@ -218,6 +378,7 @@ local function paint(dev, isTerm)
     else
         bannerTxt = danger and "!! DEPRESSURIZED !!" or "AREA SEALED - SAFE"
     end
+    if flashing() then bannerCol = flashOn and C_ERR or C_BG end
     local bTop = 3
     local bBot = math.min(h - (compact and 4 or 6), bTop + 4)
     if bBot < bTop then bBot = bTop end
@@ -270,6 +431,12 @@ local function paint(dev, isTerm)
 end
 
 local function render()
+    if flashing() then
+        if not flashTimer then flashTimer = os.startTimer(FLASH) end
+    else
+        flashOn = false
+    end
+    setLight()
     paint(term, true)
     if monitor then pcall(paint, monitor, false) end
 end
@@ -283,6 +450,8 @@ local function message(kind)
         sealed = state.sealed,
         locked = state.locked,
         interlock = (not isSensor()) and interlocked() or nil,
+        ver = VERSION,
+        keyed = KEY ~= nil,
         reqID = newReqID(),
     }
 end
@@ -312,17 +481,33 @@ end
 
 local function adopt(id)
     if state.serverId ~= id then
+        log("linked to server #" .. tostring(id))
         state.serverId = id
         saveState()
     end
     lastHeard = os.clock()
 end
 
+local function noteLockdown(flag)
+    flag = flag == true
+    if flag ~= (state.lockdown == true) then
+        state.lockdown = flag
+        log(flag and "station lockdown" or "lockdown released")
+    end
+end
+
 local function onAck(id, msg)
     adopt(id)
     if not state.registered then state.registered = true end
     if pending and msg.reqID == pending.reqID then pending = nil end
+    noteLockdown(msg.lockdown)
+    local wasSealed = state.sealed
     local res = applyCommand(msg.command, msg.locked, msg.force)
+    if res == "refused" then
+        log("refused unseal from #" .. tostring(id) .. ": zone sensor reads no oxygen")
+    elseif wasSealed ~= state.sealed then
+        log("ack from #" .. tostring(id) .. ": " .. tostring(msg.command) .. (msg.force and " (forced)" or ""))
+    end
     saveState()
     return res
 end
@@ -474,11 +659,79 @@ local function runSetup()
         { label = "2 wide", value = 2 },
         { label = "3 wide", value = 3 },
     }, state.displayWidth)
+    local lights = { { label = "none", value = "none" } }
+    for _, o in ipairs(sideOptions()) do lights[#lights + 1] = o end
+    if type(state.lightSide) == "string" and state.lightSide ~= "none" then pcall(redstone.setOutput, state.lightSide, false) end
+    state.lightSide = askChoice("Warning light", "Side that pulses a lamp while sealed or locked down:", lights, state.lightSide or "none")
+    log("setup: " .. tostring(state.name) .. " " .. tostring(state.role) .. " detector " .. tostring(state.detectorSide) .. " door " .. tostring(state.airlockSide) .. " light " .. tostring(state.lightSide))
     state.oxygenated = readOxygen()
     applyPhysical(state.sealed)
     saveState()
     findMonitor()
     bootHandshake()
+end
+
+local function requestChunk()
+    rednet.send(upd.from, { type = "alk_get", ver = upd.ver, i = upd.i })
+    upd.timer = os.startTimer(CHUNK_WAIT)
+end
+
+local function startUpdate(id, msg)
+    if upd or not KEY or type(msg.ver) ~= "string" or msg.ver == VERSION then return end
+    if type(msg.size) ~= "number" or type(msg.chunks) ~= "number" or msg.chunks < 1 or msg.chunks > 200 then return end
+    if type(msg.hashes) ~= "table" or #msg.hashes ~= msg.chunks then return end
+    local want = hmac(KEY, "alk_update|" .. msg.ver .. "|" .. msg.size .. "|" .. table.concat(msg.hashes, ","))
+    if want ~= msg.mac then
+        log("rejected an update offer from #" .. tostring(id) .. ": bad signature")
+        return
+    end
+    log("update " .. msg.ver .. " offered by #" .. tostring(id) .. ", downloading " .. msg.chunks .. " parts")
+    upd = { from = id, ver = msg.ver, size = msg.size, hashes = msg.hashes, chunks = msg.chunks, parts = {}, i = 1, tries = 0 }
+    requestChunk()
+end
+
+local function finishUpdate()
+    local text = table.concat(upd.parts)
+    local u = upd
+    upd = nil
+    if #text ~= u.size then
+        log("update " .. u.ver .. " has the wrong size")
+        return
+    end
+    if not loadstring(text, "=airlock") then
+        log("update " .. u.ver .. " does not compile")
+        return
+    end
+    local path = programPath()
+    local tmp = path .. ".new"
+    local ok = pcall(function()
+        local h = fs.open(tmp, "w")
+        h.write(text)
+        h.close()
+    end)
+    local back = ok and readText(tmp)
+    if not back or back:gsub("[\r\n]+$", "") ~= text:gsub("[\r\n]+$", "") then
+        pcall(fs.delete, tmp)
+        log("update " .. u.ver .. " could not be written; is the computer full?")
+        return
+    end
+    fs.delete(path)
+    fs.move(tmp, path)
+    saveState()
+    log("update " .. u.ver .. " installed, rebooting")
+    os.reboot()
+end
+
+local function onChunk(id, msg)
+    if not upd or id ~= upd.from or msg.ver ~= upd.ver or msg.i ~= upd.i or type(msg.data) ~= "string" then return end
+    if sha256(msg.data) ~= upd.hashes[upd.i] then
+        log("update part " .. upd.i .. " failed its checksum")
+        return
+    end
+    upd.parts[upd.i] = msg.data
+    upd.i = upd.i + 1
+    upd.tries = 0
+    if upd.i > upd.chunks then finishUpdate() else requestChunk() end
 end
 
 local function runtimeLoop()
@@ -499,6 +752,7 @@ local function runtimeLoop()
         if e == "redstone" then
             local o2 = readOxygen()
             if o2 ~= state.oxygenated then
+                log("detector: " .. (o2 and "oxygen" or "NO OXYGEN"))
                 state.oxygenated = o2
                 saveState()
                 sendStatus("alk_status")
@@ -517,6 +771,7 @@ local function runtimeLoop()
             if failsafeTimer and ev[2] == failsafeTimer then
                 failsafeTimer = nil
                 if (not state.oxygenated) and not state.sealed then
+                    log("failsafe: own detector has no oxygen, sealing")
                     applyPhysical(true)
                     saveState()
                     sendStatus("alk_status")
@@ -525,6 +780,7 @@ local function runtimeLoop()
             elseif peerTimer and ev[2] == peerTimer then
                 peerTimer = nil
                 if not state.sealed then
+                    log("zone sensor reports no oxygen, sealing")
                     applyPhysical(true)
                     saveState()
                     sendStatus("alk_status")
@@ -532,11 +788,29 @@ local function runtimeLoop()
                 end
             elseif pending and ev[2] == pending.timer then
                 if pending.tries >= RETRY_MAX then
+                    log("server did not answer " .. RETRY_MAX .. " status reports")
                     pending = nil
                 elseif linked() then
                     local m = message("alk_status")
                     rednet.send(state.serverId, m)
                     pending = { reqID = m.reqID, tries = pending.tries + 1, timer = os.startTimer(RETRY_EVERY) }
+                end
+            elseif flashTimer and ev[2] == flashTimer then
+                flashTimer = nil
+                if flashing() then
+                    flashOn = not flashOn
+                    flashTimer = os.startTimer(FLASH)
+                else
+                    flashOn = false
+                end
+                render()
+            elseif upd and ev[2] == upd.timer then
+                upd.tries = upd.tries + 1
+                if upd.tries > CHUNK_TRIES then
+                    log("update " .. upd.ver .. " stopped: no answer for part " .. upd.i)
+                    upd = nil
+                else
+                    requestChunk()
                 end
             elseif ev[2] == beatTimer then
                 beatTimer = os.startTimer(HEARTBEAT)
@@ -563,8 +837,10 @@ local function runtimeLoop()
                     if not isSensor() and nameBase(state.name) ~= nil and msg.group == nameBase(state.name) and type(msg.oxygenated) == "boolean" then
                         local was = interlocked()
                         local low = not msg.oxygenated
+                        if not peer or peer.low ~= low then log("zone sensor: " .. (low and "NO OXYGEN" or "oxygen")) end
                         peer = { low = low, at = os.clock(), since = (low and peer and peer.low) and peer.since or os.clock() }
                         if was ~= interlocked() then
+                            log(interlocked() and "interlock on: will not open" or "interlock off")
                             sendStatus("alk_status")
                             render()
                         end
@@ -575,6 +851,12 @@ local function runtimeLoop()
                             peerTimer = nil
                         end
                     end
+                elseif msg.type == "alk_update" then
+                    startUpdate(id, msg)
+                elseif msg.type == "alk_chunk" then
+                    onChunk(id, msg)
+                elseif msg.type == "alk_dump" and (id == state.serverId or not linked()) then
+                    rednet.send(id, { type = "alk_log", nonce = msg.nonce, text = logTail() })
                 elseif msg.type == "alk_ack" and (id == state.serverId or not linked()) then
                     if onAck(id, msg) == "refused" then sendStatus("alk_status") end
                     render()
@@ -583,9 +865,12 @@ local function runtimeLoop()
                     if msg.type == "alk_poll" then
                         sendStatus("alk_status_reply")
                     elseif msg.type == "alk_cmd" then
+                        noteLockdown(msg.lockdown)
+                        local wasSealed = state.sealed
                         local res = applyCommand(msg.action, msg.locked, msg.force)
+                        log("cmd from #" .. tostring(id) .. ": " .. tostring(msg.action) .. (msg.locked and " locked" or "") .. (msg.force and " forced" or "") .. (res == "refused" and " REFUSED (zone sensor no oxygen)" or (wasSealed ~= state.sealed and "" or " (no change)")))
                         saveState()
-                        if res == "refused" then sendStatus("alk_status") end
+                        sendStatus("alk_status")
                         render()
                     end
                 end
@@ -612,8 +897,10 @@ if not openModems() then
 end
 
 loadState()
+loadKey()
 findMonitor()
 state.oxygenated = readOxygen()
+log("boot " .. tostring(state.name) .. " (" .. tostring(state.role) .. ") version " .. VERSION .. (KEY and ", update key present" or ", no update key") .. ", detector " .. (state.oxygenated and "oxygen" or "NO OXYGEN") .. ", door " .. (state.sealed and "sealed" or "open"))
 
 if not state.name then
     runSetup()

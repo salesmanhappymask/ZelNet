@@ -674,6 +674,15 @@ if not src then
 say("The airlock program is missing from this disk.", colors.red)
 return
 end
+local key = readAll("/" .. here .. "/airlock.key")
+if key and readAll("/airlock.key") ~= key then
+local kh = fs.open("/airlock.key", "w")
+if kh then
+kh.write(key)
+kh.close()
+say("Update key installed: this airlock now takes updates from the server.", colors.lime)
+end
+end
 if readAll("/startup") ~= src then
 if fs.exists("/startup") then
 if fs.exists("/startup.old") then fs.delete("/startup.old") end
@@ -710,6 +719,7 @@ function M.writeAirlock(driveName, opts)
     if not ok then return nil, cerr end
     if freeOf(mount) < #program + #AIRLOCK_INSTALLER + M.MARGIN then return nil, "not enough space on the disk in " .. driveName end
     local files = { { "airlock", program }, { M.FILES.installer, AIRLOCK_INSTALLER } }
+    if type(opts.key) == "string" and opts.key ~= "" then files[#files + 1] = { "airlock.key", opts.key } end
     for _, f in ipairs(files) do
         local wok, werr = writeText(mount .. "/" .. f[1], f[2])
         if not wok then

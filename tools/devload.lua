@@ -1,5 +1,14 @@
 local M = {}
 
+local function stampVersion(text)
+    local a, b = 1, 0
+    for i = 1, #text do
+        a = (a + text:byte(i)) % 65521
+        b = (b + a) % 65521
+    end
+    return (text:gsub('local VERSION = "dev"', string.format('local VERSION = "%04x%04x"', b, a), 1))
+end
+
 function M.make(root)
     root = root or "."
     local cache, loading = {}, {}
@@ -12,7 +21,7 @@ function M.make(root)
         if prog then
             local f = io.open(root .. "/programs/" .. prog .. ".lua", "rb")
             if not f then error("missing program " .. prog, 2) end
-            local text = f:read("*a")
+            local text = stampVersion(f:read("*a"))
             f:close()
             fn = function() return text end
         else

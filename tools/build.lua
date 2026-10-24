@@ -38,9 +38,18 @@ local function longString(text)
     return "[" .. eq .. "[\n" .. text .. "]" .. eq .. "]"
 end
 
+local function stampVersion(text)
+    local a, b = 1, 0
+    for i = 1, #text do
+        a = (a + text:byte(i)) % 65521
+        b = (b + a) % 65521
+    end
+    return (text:gsub('local VERSION = "dev"', string.format('local VERSION = "%04x%04x"', b, a), 1))
+end
+
 local function moduleSource(name)
     local prog = name:match("^prog_([%w_]+)$")
-    if prog then return "return " .. longString(readFile(root .. "/programs/" .. prog .. ".lua")) .. "\n" end
+    if prog then return "return " .. longString(stampVersion(readFile(root .. "/programs/" .. prog .. ".lua"))) .. "\n" end
     return readFile(root .. "/src/" .. name .. ".lua")
 end
 

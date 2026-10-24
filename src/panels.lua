@@ -643,7 +643,41 @@ function Panels:drawProcesses(page, x, y, w, h)
     end
 end
 
+function Panels:pushLogs()
+    if self.logBusy then return end
+    local al = self.con.ctx.airlock
+    local okA, mod = pcall(need, "airlock")
+    if not al or not okA then return end
+    self.logBusy = true
+    self.logStatus = { text = "Collecting airlock logs...", kind = "warn" }
+    local function job()
+        local ok, err = pcall(function()
+            local n = self.con:call(al, "requestLogs") or 0
+            self.logStatus = { text = "Collecting logs from " .. n .. " airlocks...", kind = "warn" }
+            compat.sleep(mod.DUMP_WAIT)
+            local header = "server " .. tostring(self.cfg.realm) .. " #" .. tostring(os.getComputerID and os.getComputerID() or "?") .. " " .. version.label()
+            local text = self.con:call(al, "logBundle", header)
+            if type(text) ~= "string" then error("could not build the bundle", 0) end
+            util.writeFile("/airlock_logs.txt", text)
+            self.logStatus = { text = "Uploading " .. #text .. " characters...", kind = "warn" }
+            local url, uerr = mod.upload(text)
+            if url then
+                self.con:call(al, "event", "logs pushed: " .. url)
+                self.con:audit("airlock_logs", url, #text .. " bytes", true)
+                self.logStatus = { text = "Logs: " .. url, kind = "ok" }
+            else
+                self.logStatus = { text = "Upload failed (" .. tostring(uerr) .. "); saved /airlock_logs.txt", kind = "bad" }
+            end
+        end)
+        if not ok then self.logStatus = { text = "Push logs failed: " .. tostring(err), kind = "bad" } end
+        self.logBusy = false
+        os.queueEvent("zn_panel")
+    end
+    if self.n and self.n.spawn then self.n:spawn(job, "airlock-logs") else job() end
+end
+
 function Panels:consoleAction(act)
+    if act == "airlock:logs" then return self:pushLogs() end
     local tab = act:match("^tab:(.+)$")
     if tab then
         self.tab = tab
@@ -1050,10 +1084,16 @@ function Panels:tab_airlocks(page, area)
             }
         end
     end
-    self:listCard(page, area, "Airlocks", c.orange, tostring(#rows), {
+    local foot = area.y + area.h - 1
+    local list = { x = area.x, y = area.y, w = area.w, h = area.h - 2 }
+    self:listCard(page, list, "Airlocks", c.orange, tostring(#rows), {
         { key = "name", label = "Name", w = 24 }, { key = "kind", label = "Kind", w = 10 }, { key = "online", label = "Link", w = 8 },
         { key = "o2", label = "Oxygen", w = 12 }, { key = "state", label = "State" },
     }, rows, "No airlock controllers have registered yet.")
+    local label = self.logBusy and " Working... " or " Push logs "
+    page:button(area.x, foot, #label, 1, label, self.logBusy and c.div or c.brand, c.text, "airlock:logs")
+    local st = self.logStatus
+    if st then page.s:field(area.x + #label + 1, foot, area.w - #label - 1, st.text, c[st.kind] or c.text, c.bg) end
 end
 
 function Panels:tab_log(page, area)
@@ -1440,7 +1480,7 @@ function Panels:writeJob(role, name, info)
     local prov = need("provision")
     if role == "airlock" then
         st.note = "Writing the airlock program"
-        local ok, res = prov.writeAirlock(info.name, { wipe = true })
+        local ok, res = prov.writeAirlock(info.name, { wipe = true, key = self.con:airlockKey() })
         self.con:audit("provision", "airlock", ok and (info.name .. " (setup monitor)") or tostring(res), ok and true or false)
         if not ok then
             st.screen = "error"

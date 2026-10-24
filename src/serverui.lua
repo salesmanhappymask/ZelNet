@@ -1097,6 +1097,15 @@ function Console:newDevice()
     return self:writeDevice(role, name, drive, prov)
 end
 
+function Console:airlockKey()
+    if type(self.cfg.airlockKey) ~= "string" or self.cfg.airlockKey == "" then
+        self.cfg.airlockKey = need("crypto").newKey()
+        self:save()
+        self:audit("settings", "airlock_key", "created", true)
+    end
+    return self.cfg.airlockKey
+end
+
 function Console:newAirlock()
     local prov = self:provisionModule()
     if not prov or not prov.writeAirlock then
@@ -1107,7 +1116,7 @@ function Console:newAirlock()
     if not drive then return nil end
     if not ui.confirm(self.surf, "New Airlock", "Write the airlock program to the disk in " .. drive.name .. "? The airlock computer asks whether it is a door or an oxygen sensor the first time it starts.", { yes = "Write" }) then return nil end
     self.provBusy = "terminal"
-    local wok, res = self:busy("New Airlock", "Writing the airlock program...", function() return prov.writeAirlock(drive.name, { wipe = drive.wipe }) end)
+    local wok, res = self:busy("New Airlock", "Writing the airlock program...", function() return prov.writeAirlock(drive.name, { wipe = drive.wipe, key = self:airlockKey() }) end)
     self.provBusy = nil
     self:audit("provision", "airlock", wok and drive.name or tostring(res), wok and true or false)
     if not wok then return self:result("New Airlock", false, "Could not write the disk: " .. tostring(res)) end
@@ -1748,8 +1757,12 @@ function Console:airlocks()
                 if row.rec then page:hotspot(ix, iy + r - 1, iw, 1, "rec:" .. ridx) end
             end
         end
-        local buttons = { { label = "Poll", key = "r" }, { label = "Find", key = "d" } }
-        if #held > 0 then buttons[3] = { label = "Release", key = "x" } elseif (s.nodes or 0) > 0 then buttons[3] = { label = "Lockdown", key = "l", bg = c.bad } end
+        local buttons = {}
+        if #held > 0 then buttons[#buttons + 1] = { label = "Release", key = "x", id = "release" }
+        elseif (s.nodes or 0) > 0 then buttons[#buttons + 1] = { label = "Lockdown", key = "l", bg = c.bad, id = "lockdown" } end
+        buttons[#buttons + 1] = { label = "Logs", key = "p", id = "logs" }
+        buttons[#buttons + 1] = { label = "Poll", key = "r", id = "poll" }
+        buttons[#buttons + 1] = { label = "Find", key = "d", id = "find" }
         self:footer(page, ix, iy + ih - 1, iw, buttons)
         surf:flush()
         local ev, a, b, cc = compat.pullUI()
@@ -1768,21 +1781,27 @@ function Console:airlocks()
                 action = "rec:" .. recRows[sel]
             end
         elseif ev == "char" then
-            if a == "r" or a == "R" then action = "act:1" elseif a == "d" or a == "D" then action = "act:2" elseif (a == "x" or a == "X") and #held > 0 then action = "act:3" elseif (a == "l" or a == "L") and #held == 0 and (s.nodes or 0) > 0 then action = "act:3" end
+            local k = a:lower()
+            for _, bt in ipairs(buttons) do if bt.key == k then action = bt.id end end
         elseif ev == "timer" and a == timer then
             timer = os.startTimer(1)
         elseif ev == "term_resize" then
             surf:resize()
         end
         if action == "back" then return nil end
-        if action == "act:1" then
+        local ai = tonumber(tostring(action or ""):match("^act:(%d+)$"))
+        if ai and buttons[ai] then action = buttons[ai].id end
+        if action == "poll" then
             self:call(al, "poll")
-        elseif action == "act:2" then
+        elseif action == "find" then
             self:call(al, "discover")
-        elseif action == "act:3" and #held == 0 then
+        elseif action == "logs" then
+            self:airlockPushLogs()
+            timer = os.startTimer(1)
+        elseif action == "lockdown" then
             self:airlockLockdown()
             timer = os.startTimer(1)
-        elseif action == "act:3" and #held > 0 then
+        elseif action == "release" and #held > 0 then
             local h1 = held[1]
             if ui.confirm(surf, "Release Containment", "Stop containment for " .. tostring(h1.station) .. "? Doors go back to the normal rule: each door opens when its zone and the far side both have oxygen.", { yes = "Release" }) then
                 local ok, err = self:call(al, "releaseContainment", h1.station, "console")
@@ -1798,6 +1817,35 @@ function Console:airlocks()
             end
         end
     end
+end
+
+function Console:airlockPushLogs()
+    local al = self.ctx.airlock
+    local okA, mod = pcall(need, "airlock")
+    if not al or not okA then return nil end
+    local n = self:call(al, "requestLogs") or 0
+    local wait = mod.DUMP_WAIT
+    self:busy("Push Logs", "Collecting logs from " .. n .. " airlocks...", function() compat.sleep(wait) end)
+    local header = "server " .. tostring(self.cfg.realm) .. " #" .. tostring(os.getComputerID and os.getComputerID() or "?") .. " " .. version.label()
+    local text = self:call(al, "logBundle", header)
+    if type(text) ~= "string" then return self:result("Push Logs", false, "Could not build the log bundle.") end
+    util.writeFile("/airlock_logs.txt", text)
+    local url, err = self:busy("Push Logs", "Uploading " .. #text .. " characters...", function() return mod.upload(text) end)
+    if url then
+        self:call(al, "event", "logs pushed: " .. url)
+        self:audit("airlock_logs", url, #text .. " bytes", true)
+        self:say("Push Logs", {
+            { text = "Uploaded. Send this address to Claude:", color = self.surf.c.ok },
+            url,
+            "A copy is saved in /airlock_logs.txt.",
+        })
+    else
+        self:say("Push Logs", {
+            { text = "Upload failed: " .. tostring(err), color = self.surf.c.bad },
+            "The bundle is saved in /airlock_logs.txt on this computer.",
+        })
+    end
+    return nil
 end
 
 function Console:airlockLockdown()

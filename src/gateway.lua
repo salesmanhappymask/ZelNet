@@ -17,8 +17,9 @@ M.MAX_TRACKED = 500
 M.INBOX_MAX = 64
 M.OPS = { hello = true, ping = true, send = true, publish = true, subscribe = true, unsubscribe = true }
 M.ALK_PORT = "zn.alk"
-M.ALK_FROM_NODE = { alk_register = true, alk_hello = true, alk_status = true, alk_status_reply = true }
-M.ALK_MAX = 1024
+M.ALK_FROM_NODE = { alk_register = true, alk_hello = true, alk_status = true, alk_status_reply = true, alk_log = true, alk_get = true }
+M.ALK_MAX = 7000
+M.ALK_RATE = 40
 M.BROADCAST = 65535
 
 function M.dataSize(data)
@@ -80,6 +81,7 @@ function M.new(node, opts)
     self.isOff = opts.isOff or function() return false end
     self.relay = opts.relay
     self.rate = {}
+    self.alkRate = {}
     self.reported = {}
     self.sides = {}
     self.inbox = {}
@@ -149,7 +151,15 @@ function Gateway:relayAirlock(cid, msg)
     if not cid or not self.relay or type(msg) ~= "table" or not M.ALK_FROM_NODE[msg.type] then return end
     local size = M.dataSize(msg)
     if not size or size > M.ALK_MAX then return end
-    if not self:allow(cid) then
+    local now = compat.now()
+    local r = self.alkRate[cid]
+    if not r or now - r.start >= M.RATE_WINDOW then
+        if not r and util.count(self.alkRate) >= M.MAX_TRACKED then self.alkRate = {} end
+        r = { start = now, n = 0 }
+        self.alkRate[cid] = r
+    end
+    r.n = r.n + 1
+    if r.n > M.ALK_RATE then
         self.stats.dropped = self.stats.dropped + 1
         return
     end
