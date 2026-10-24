@@ -1,6 +1,7 @@
 local STATE_FILE = "/airlock.dat"
 local SILENT_AFTER = 960
 local SEARCH_EVERY = 60
+local PEER_DELAY = 2
 
 local SIDES = { "top", "bottom", "left", "right", "front", "back" }
 
@@ -35,6 +36,12 @@ local lastHeard = nil
 local function trim(s)
     s = tostring(s or "")
     return (s:match("^%s*(.-)%s*$") or "")
+end
+
+local function nameBase(name)
+    local base = tostring(name or ""):match("^(.-)%-[%w]+$")
+    if base and base ~= "" then return base:lower() end
+    return nil
 end
 
 local function nameSuffix(name)
@@ -271,6 +278,13 @@ local function announce()
     sendStatus(state.registered and "alk_hello" or "alk_register")
 end
 
+local function tellPeers()
+    local group = nameBase(state.name)
+    if isSensor() and group then
+        pcall(rednet.broadcast, { type = "alk_peer", group = group, oxygenated = state.oxygenated })
+    end
+end
+
 local function adopt(id)
     if state.serverId ~= id then
         state.serverId = id
@@ -442,7 +456,12 @@ end
 
 local function runtimeLoop()
     local failsafeTimer = nil
+    local peerTimer = nil
     local searchTimer = os.startTimer(SEARCH_EVERY)
+    if (not state.oxygenated) and state.failsafe and not state.sealed and not isSensor() then
+        failsafeTimer = os.startTimer(state.failsafeDelay)
+    end
+    tellPeers()
     render()
     while true do
         local ev = { os.pullEvent() }
@@ -454,6 +473,7 @@ local function runtimeLoop()
                 state.oxygenated = o2
                 saveState()
                 sendStatus("alk_status")
+                tellPeers()
                 render()
                 if (not o2) and state.failsafe and not state.sealed and not isSensor() then
                     failsafeTimer = os.startTimer(state.failsafeDelay)
@@ -466,6 +486,14 @@ local function runtimeLoop()
             if failsafeTimer and ev[2] == failsafeTimer then
                 failsafeTimer = nil
                 if (not state.oxygenated) and not state.sealed then
+                    applyPhysical(true)
+                    saveState()
+                    sendStatus("alk_status")
+                    render()
+                end
+            elseif peerTimer and ev[2] == peerTimer then
+                peerTimer = nil
+                if not state.sealed then
                     applyPhysical(true)
                     saveState()
                     sendStatus("alk_status")
@@ -486,6 +514,14 @@ local function runtimeLoop()
                     adopt(id)
                     announce()
                     render()
+                elseif msg.type == "alk_peer" then
+                    if not isSensor() and nameBase(state.name) ~= nil and msg.group == nameBase(state.name) then
+                        if msg.oxygenated == false and state.failsafe and not state.sealed then
+                            peerTimer = peerTimer or os.startTimer(PEER_DELAY)
+                        elseif msg.oxygenated == true then
+                            peerTimer = nil
+                        end
+                    end
                 elseif msg.type == "alk_ack" and (id == state.serverId or not linked()) then
                     onAck(id, msg)
                     render()

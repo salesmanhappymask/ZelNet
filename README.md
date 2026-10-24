@@ -87,7 +87,15 @@ An airlock computer needs a modem and redstone from an oxygen detector. It can b
 * **A name.** Doors of one airlock share a name ending in a letter (`dock-A`, `dock-B`); the chamber sensor ends in `-C` (`dock-C`).
 * **The detector side, the door side and the monitor width.**
 
-Press **S** on the airlock computer at any time to change these; every question starts on the current answer. The airlock finds the server by itself and links to a rebuilt server too. The server seals every door of an airlock when its sensor or a door loses air, and shows them under **Airlocks** on the console. Airlock control must be on (**Settings, Airlock control**). The program is `programs/airlock.lua` if you want to install it by hand.
+Press **S** on the airlock computer at any time to change these; every question starts on the current answer. The airlock finds the server by itself and links to a rebuilt server too. Airlock control must be on (**Settings, Airlock control**). The program is `programs/airlock.lua` if you want to install it by hand.
+
+How sealing works:
+
+* **Each door joins two areas.** Its own detector reads the area on the far side; the group's `-C` sensor reads the zone between the doors. A door opens only when both read oxygen. The `-C` sensor decides for its whole group: if `Athena6-C` reads no oxygen, `Athena6-A` and `Athena6-B` stay sealed even though their own detectors read oxygen.
+* **Containment.** When any detector loses oxygen, every door of that station closes. A station is every group that shares a name once trailing digits are dropped, so `Athena` and `Athena2` to `Athena8` are one station. The doors stay shut for at least 15 seconds so each section can seal itself. After that each door reopens once both of its sides have read oxygen for 10 seconds; doors next to a zone without oxygen stay shut. Containment ends when every area holds oxygen again.
+* **Repeated leaks.** If containment starts three times within ten minutes, the station is held shut until you press **Release** under **Airlocks** on the console.
+* **Without the server.** A sensor also tells its own doors directly when its zone loses air, and a door seals by itself when its own detector loses air. Either way the door then reports to the server, which corrects it if it disagrees.
+* **Station Athena navmap.** **Settings, Setup Athena Navmap** puts a live map on a 6 wide by 5 tall advanced monitor: the station on the right, each zone green while it holds oxygen and flashing red with a callout when it does not, door states, and a status column on the left with zones, doors, containment and alerts. It reads airlocks named `Athena-A` to `Athena8-C`.
 
 ## Getting the program into the game
 

@@ -36,7 +36,8 @@ for i = 2, #arg do only[#only + 1] = arg[i]:match("([%w_]+)%.lua$") or arg[i] en
 local names = {}
 if #only > 0 then names = only else for name in manifest:gmatch("[%w_]+") do names[#names + 1] = name end end
 for _, name in ipairs(names) do
-    local path = root .. "/src/" .. name .. ".lua"
+    local prog = name:match("^prog_([%w_]+)$")
+    local path = prog and (root .. "/programs/" .. prog .. ".lua") or (root .. "/src/" .. name .. ".lua")
     local src = readFile(path)
     if not src then
         report(path, 0, "missing module file")

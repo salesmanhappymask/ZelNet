@@ -14,7 +14,7 @@ M.MAX_DIST = 728999
 M.TRIES = 16
 M.SERVER_ONLY = {
     storage = true, registry = true, directory = true, bridge = true, backbone = true,
-    server = true, tekmail = true, airlock = true, serverui = true, panels = true, updater = true, prog_airlock = true,
+    server = true, tekmail = true, airlock = true, serverui = true, panels = true, navmap = true, updater = true, prog_airlock = true,
 }
 M.MAGIC = "ZNPK1"
 

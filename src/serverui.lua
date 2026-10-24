@@ -1720,7 +1720,16 @@ function Console:airlocks()
         local page = ui.page(surf)
         local c = page.c
         local s = self:call(al, "stats") or {}
-        local ix, iy, iw, ih = page:container("Sealing Manager", "Nodes " .. tostring(s.nodes or 0) .. "  Sealed " .. tostring(s.sealed or 0) .. "  Low " .. tostring(s.low or 0) .. "  Off " .. tostring(s.offline or 0))
+        local held = self:call(al, "containment") or {}
+        local sub = "Nodes " .. tostring(s.nodes or 0) .. "  Sealed " .. tostring(s.sealed or 0) .. "  Low " .. tostring(s.low or 0) .. "  Off " .. tostring(s.offline or 0)
+        local ix, iy, iw, ih = page:container("Sealing Manager", sub)
+        if #held > 0 then
+            local h1 = held[1]
+            local note = (h1.hold and "HELD SHUT: " or "CONTAINMENT: ") .. tostring(h1.station) .. " (" .. tostring(h1.cause or "?") .. ")" .. (#held > 1 and (" +" .. (#held - 1)) or "")
+            surf:field(ix, iy, iw, note, c.text, h1.hold and c.bad or c.orange)
+            iy = iy + 1
+            ih = ih - 1
+        end
         local viewH = math.max(1, ih - 2)
         local selRow = recRows[sel] or 1
         if selRow < scroll + 1 then scroll = selRow - 1 end
@@ -1739,9 +1748,9 @@ function Console:airlocks()
                 if row.rec then page:hotspot(ix, iy + r - 1, iw, 1, "rec:" .. ridx) end
             end
         end
-        self:footer(page, ix, iy + ih - 1, iw, {
-            { label = "Poll", key = "r" }, { label = "Find", key = "d" },
-        })
+        local buttons = { { label = "Poll", key = "r" }, { label = "Find", key = "d" } }
+        if #held > 0 then buttons[3] = { label = "Release", key = "x" } end
+        self:footer(page, ix, iy + ih - 1, iw, buttons)
         surf:flush()
         local ev, a, b, cc = compat.pullUI()
         local action
@@ -1759,7 +1768,7 @@ function Console:airlocks()
                 action = "rec:" .. recRows[sel]
             end
         elseif ev == "char" then
-            if a == "r" or a == "R" then action = "act:1" elseif a == "d" or a == "D" then action = "act:2" end
+            if a == "r" or a == "R" then action = "act:1" elseif a == "d" or a == "D" then action = "act:2" elseif (a == "x" or a == "X") and #held > 0 then action = "act:3" end
         elseif ev == "timer" and a == timer then
             timer = os.startTimer(1)
         elseif ev == "term_resize" then
@@ -1770,6 +1779,13 @@ function Console:airlocks()
             self:call(al, "poll")
         elseif action == "act:2" then
             self:call(al, "discover")
+        elseif action == "act:3" and #held > 0 then
+            local h1 = held[1]
+            if ui.confirm(surf, "Release Containment", "Stop containment for " .. tostring(h1.station) .. "? Doors go back to the normal rule: each door opens when its zone and the far side both have oxygen.", { yes = "Release" }) then
+                local ok, err = self:call(al, "releaseContainment", h1.station, "console")
+                if not ok then self:result("Release Containment", false, err or "Could not release.") end
+            end
+            timer = os.startTimer(1)
         elseif action then
             local ridx = tonumber(tostring(action):match("^rec:(%d+)$"))
             if ridx and rows[ridx] and rows[ridx].rec then
@@ -1980,6 +1996,7 @@ function Console:settings()
         local cfg = self.cfg
         local choice = self:choose("Settings", "Changes are saved to the config", {
             { label = "Displays", hint = M.displayHint(cfg), value = "displays" },
+            { label = "Setup Athena Navmap", hint = M.navmapHint(cfg), value = "navmap" },
             { label = "Proximity unlock", hint = M.proximityHint(cfg), value = "sensor" },
             { label = "Lock timeout", hint = self:lockAfter() > 0 and util.fmtDuration(self:lockAfter()) or "never", value = "lock" },
             { label = "Intervals", hint = "beacon " .. tostring(cfg.beaconInterval) .. " hello " .. tostring(cfg.helloInterval), value = "intervals" },
@@ -1991,6 +2008,8 @@ function Console:settings()
         if not choice then return nil end
         if choice == "displays" then
             self:displaySettings()
+        elseif choice == "navmap" then
+            self:navmapSettings()
         elseif choice == "sensor" then
             local r = ui.form(self.surf, {
                 title = "Proximity Unlock",
@@ -2139,6 +2158,53 @@ function M.displayForm(surf, cfg)
     end
     panels.clearMonitors(names)
     return result
+end
+
+function M.navmapHint(cfg)
+    local d = type(cfg.displays) == "table" and cfg.displays or {}
+    return d.navmap or "off"
+end
+
+function Console:navmapSettings()
+    local okP, panels = pcall(need, "panels")
+    if not okP then return nil end
+    local cfg = self.cfg
+    local names = ui.findMonitors()
+    local d = type(cfg.displays) == "table" and cfg.displays or {}
+    local roleOf = {}
+    for _, r in ipairs(M.DISPLAY_ROLES) do
+        if d[r.key] and r.key ~= "drive" then roleOf[d[r.key]] = r.label:gsub(":$", "") end
+    end
+    if d.navmap then roleOf[d.navmap] = "Athena navmap" end
+    panels.identify(names, roleOf)
+    local value, errMsg = d.navmap or "", nil
+    local chosen
+    while true do
+        local r = ui.form(self.surf, {
+            title = "Athena Navmap", error = errMsg, submit = "Save",
+            intro = "Shows Station Athena and its airlock zones on an advanced monitor 6 wide and 5 tall. Monitors show their names now. Type 12 or monitor_12. Leave it empty to turn the navmap off.",
+            fields = { { label = "Monitor:", key = "mon", value = value, hint = "6x5 advanced monitor", maxLen = 24 } },
+        })
+        if not r then break end
+        value = r.mon or ""
+        local name, err = panels.validateNavmap(value, cfg)
+        if name ~= nil then
+            chosen = name
+            break
+        end
+        errMsg = err
+    end
+    panels.clearMonitors(names)
+    if chosen == nil then return nil end
+    cfg.displays = type(cfg.displays) == "table" and cfg.displays or {}
+    cfg.displays.navmap = chosen or nil
+    if self.panels then self.panels:reset() end
+    if self:save() then self:audit("settings", "navmap", tostring(chosen or "off"), true) end
+    if self.cfg.airlocks == false and chosen then
+        self:say("Athena Navmap", "The navmap is on " .. chosen .. ", but airlock control is off. Turn it on under Settings and reboot so the map gets airlock data.", self.surf.c.warn)
+    end
+    os.queueEvent("zn_panel")
+    return nil
 end
 
 function Console:displaySettings()

@@ -3,6 +3,7 @@ local compat = need("compat")
 local util = need("util")
 local ui = need("ui")
 local version = need("version")
+local navmap = need("navmap")
 
 local M = {}
 
@@ -97,7 +98,20 @@ function M.validateDisplays(values, cfg)
     local old = M.displayNames(cfg)
     out.scale = old.scale
     out.setupScale = old.setupScale
+    if type(old.navmap) == "string" and not seen[old.navmap] then out.navmap = old.navmap end
     return out
+end
+
+function M.validateNavmap(value, cfg)
+    local name = M.normPeripheral("monitor", value)
+    if not name then return false end
+    if not peripheral.isPresent(name) then return nil, name .. " is not attached." end
+    if peripheral.getType(name) ~= "monitor" then return nil, name .. " is not a monitor." end
+    local d = M.displayNames(cfg)
+    for _, key in ipairs({ "activity", "console", "setup" }) do
+        if d[key] == name then return nil, name .. " is already the " .. key .. " monitor." end
+    end
+    return name
 end
 
 function M.identify(names, extra)
@@ -223,6 +237,22 @@ function Panels:tick()
     if d.activity then self:guard("activity", self.drawActivity) end
     if d.console and (all or n % M.CONSOLE_EVERY == 0) then self:guard("console", self.drawConsole) end
     if d.setup and (all or n % M.SETUP_EVERY == 0) then self:guard("setup", self.drawSetup) end
+    if d.navmap then self:guard("navmap", self.drawNavmap) end
+end
+
+function Panels:drawNavmap()
+    local s = self:surface("navmap")
+    if not s then return end
+    local al = self.con.ctx.airlock
+    local list, contain = {}, {}
+    if al and al.enabled ~= false then
+        list = self.con:call(al, "list") or {}
+        contain = self.con:call(al, "containment") or {}
+    end
+    local clock
+    pcall(function() clock = "Day " .. os.day() .. "  " .. textutils.formatTime(os.time(), true) end)
+    navmap.draw(s, list, contain, { frame = (self.ticks or 0) % 2, release = version.label(), clock = clock })
+    s:flush()
 end
 
 function Panels:names()
@@ -231,7 +261,7 @@ end
 
 function Panels:anyPresent()
     local d = self:names()
-    for _, key in ipairs({ "activity", "console", "setup" }) do
+    for _, key in ipairs({ "activity", "console", "setup", "navmap" }) do
         local name = d[key]
         if type(name) == "string" and peripheral.isPresent(name) then return true end
     end
@@ -249,7 +279,7 @@ function Panels:surface(key)
     if s and (s.name ~= name or not peripheral.isPresent(name)) then s = nil end
     if not s then
         local d = self:names()
-        local scale = key == "setup" and (d.setupScale or M.SCALE) or (d.scale or M.SCALE)
+        local scale = key == "setup" and (d.setupScale or M.SCALE) or (key == "navmap" and navmap.SCALE) or (d.scale or M.SCALE)
         s = ui.attachMonitor(name, scale)
         self.surfs[key] = s
     end
@@ -297,6 +327,7 @@ function Panels:drawAll()
     if self:names().activity then self:guard("activity", self.drawActivity) end
     if self:names().console then self:guard("console", self.drawConsole) end
     if self:names().setup then self:guard("setup", self.drawSetup) end
+    if self:names().navmap then self:guard("navmap", self.drawNavmap) end
 end
 
 function Panels:run()
