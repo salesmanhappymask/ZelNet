@@ -252,6 +252,66 @@ function M.writeFile(path, data)
     return true
 end
 
+function M.writeDirect(path, data)
+    local ok, err = pcall(function()
+        local h = fs.open(path, "w")
+        if not h then error("cannot open " .. path, 0) end
+        local wok, werr = pcall(h.write, data)
+        h.close()
+        if not wok then error(werr, 0) end
+    end)
+    if ok then return true end
+    return false, tostring(err)
+end
+
+M.SPACE_MARGIN = 4096
+
+function M.diskRoom(path)
+    local okF, free = pcall(fs.getFreeSpace, M.parentDir(path))
+    if not okF or type(free) ~= "number" then free = math.huge end
+    local current = 0
+    if fs.exists(path) and not fs.isDir(path) then
+        local okS, size = pcall(fs.getSize, path)
+        if okS and type(size) == "number" then current = size end
+    end
+    return free, current
+end
+
+function M.roomFor(path, size)
+    local free, current = M.diskRoom(path)
+    if free + current >= size + M.SPACE_MARGIN then return true end
+    return false, "not enough disk space: needs " .. size .. " bytes, " .. (free + current) .. " available after replacing " .. path
+end
+
+function M.replaceFile(path, data)
+    local free = M.diskRoom(path)
+    local old = M.readFile(path)
+    if free >= 3 * #data + M.SPACE_MARGIN then
+        local tmp = path .. ".dl"
+        local ok, err = M.writeFile(tmp, data)
+        if not ok then
+            pcall(fs.delete, tmp)
+            return false, err
+        end
+        local mok, merr = pcall(function()
+            if fs.exists(path) then fs.delete(path) end
+            fs.move(tmp, path)
+        end)
+        pcall(fs.delete, tmp)
+        if mok then return true end
+        if fs.exists(path) then return false, tostring(merr) end
+    end
+    local room, why = M.roomFor(path, #data)
+    if not room and not (old and not fs.exists(path)) then return false, why end
+    pcall(fs.delete, path)
+    local ok, err = M.writeDirect(path, data)
+    local back = ok and M.readFile(path)
+    if back and back:gsub("[\r\n]+$", "") == data:gsub("[\r\n]+$", "") then return true end
+    pcall(fs.delete, path)
+    if old then M.writeDirect(path, old) end
+    return false, err or "the copy on disk does not match; is the computer full?"
+end
+
 function M.readTable(path, default)
     local s = M.readFile(path)
     if not s then return default end

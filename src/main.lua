@@ -527,14 +527,8 @@ function M.fetchUpdate(n, authority, b)
 end
 
 function M.replaceFile(path, text)
-    local tmp = path .. ".dl"
-    local ok, err = util.writeFile(tmp, text)
-    if not ok then
-        pcall(fs.delete, tmp)
-        return nil, err
-    end
-    if fs.exists(path) then fs.delete(path) end
-    fs.move(tmp, path)
+    local ok, err = util.replaceFile(path, text)
+    if not ok then return nil, err end
     return true
 end
 

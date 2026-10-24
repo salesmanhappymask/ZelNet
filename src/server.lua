@@ -997,14 +997,7 @@ end
 
 function Server:installUpdate(text, ver)
     local path = self:programPath()
-    local tmp = path .. ".dl"
-    local ok, err = util.writeFile(tmp, text)
-    if ok then
-        if fs.exists(path) then fs.delete(path) end
-        fs.move(tmp, path)
-    else
-        pcall(fs.delete, tmp)
-    end
+    local ok, err = util.replaceFile(path, text)
     if not ok then
         self:warn("cannot install update " .. ver .. ": " .. tostring(err))
         return false
@@ -1036,6 +1029,11 @@ function Server:onUpdateMsg(msg)
         return
     end
     if self.fetching or b.version == version.full() or (self.update and self.update.sha == b.sha) then return end
+    local room, why = util.roomFor(self:programPath(), b.size)
+    if not room then
+        self:warn(why)
+        return
+    end
     self.log.info("downloading update " .. b.version)
     self:fetchUpdate(b)
 end

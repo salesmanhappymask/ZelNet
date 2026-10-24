@@ -74,16 +74,8 @@ end
 
 function M.install(text, path)
     path = path or "/zelnet"
-    local tmp = path .. ".dl"
-    local ok, err = util.writeFile(tmp, text)
-    if not ok then return nil, "cannot write " .. tmp .. ": " .. tostring(err) end
-    local back = util.readFile(tmp)
-    if not back or M.normalize(back) ~= M.normalize(text) then
-        pcall(fs.delete, tmp)
-        return nil, "the copy on disk does not match; is the computer full?"
-    end
-    if fs.exists(path) then fs.delete(path) end
-    fs.move(tmp, path)
+    local ok, err = util.replaceFile(path, text)
+    if not ok then return nil, "cannot write " .. path .. ": " .. tostring(err) end
     return true
 end
 
