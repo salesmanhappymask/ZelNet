@@ -201,6 +201,8 @@ textarea { min-height: 220px; font-family: ui-monospace, Menlo, Consolas, monosp
       <button class="btn" data-tool="rect" title="Paint a rectangle (R)">Rectangle</button>
       <button class="btn" data-tool="erase" title="Erase coverage (E)">Erase</button>
       <button class="btn" data-tool="ctrl" title="Place a controller (C)">Controller</button>
+      <button class="btn" data-tool="det" title="Place an oxygen detector (O)">Detector</button>
+      <button class="btn" data-tool="link" title="Link a detector to a computer (L)">Link</button>
       <button class="btn" data-tool="pan" title="Move the map (H, or hold Space)">Move</button>
     </div>
     <div class="row">
@@ -326,6 +328,8 @@ textarea { min-height: 220px; font-family: ui-monospace, Menlo, Consolas, monosp
     groups: [],
     cover: new Int16Array(W * H),
     ctrls: [],
+    dets: [],
+    links: [],
     world: { x: 0, y: 64, z: 0, set: false },
     nextId: 1
   };
@@ -349,16 +353,25 @@ textarea { min-height: 220px; font-family: ui-monospace, Menlo, Consolas, monosp
   function relZ(z) { return z + OZ; }
   function ctrlName(c) { var g = groupById(c.group); return (g ? g.name : "?") + "-" + c.letter; }
   function ctrlAt(x, z) { for (var i = 0; i < state.ctrls.length; i++) if (state.ctrls[i].x === x && state.ctrls[i].z === z) return state.ctrls[i]; return null; }
+  function detAt(x, z) { for (var i = 0; i < state.dets.length; i++) if (state.dets[i].x === x && state.dets[i].z === z) return state.dets[i]; return null; }
+  function linksOfDet(d) { return state.links.filter(function (l) { return l.dx === d.x && l.dz === d.z; }); }
+  function linksOfCtrl(c) { return state.links.filter(function (l) { return l.cx === c.x && l.cz === c.z; }); }
+  function feedsOf(d) { return linksOfDet(d).map(function (l) { return ctrlAt(l.cx, l.cz); }).filter(Boolean); }
+  function pruneLinks() {
+    state.links = state.links.filter(function (l) { return detAt(l.dx, l.dz) && ctrlAt(l.cx, l.cz); });
+  }
   function paintable(x, z) { var t = terrain[idx(x, z)]; return t === 1 || (ui.paintWalls && t === 2); }
 
   function snapshot() {
-    return JSON.stringify({ groups: state.groups, cover: Array.prototype.slice.call(state.cover), ctrls: state.ctrls, world: state.world, nextId: state.nextId });
+    return JSON.stringify({ groups: state.groups, cover: Array.prototype.slice.call(state.cover), ctrls: state.ctrls, dets: state.dets, links: state.links, world: state.world, nextId: state.nextId });
   }
   function restore(text) {
     var d = JSON.parse(text);
     state.groups = d.groups;
     state.cover = Int16Array.from(d.cover);
     state.ctrls = d.ctrls;
+    state.dets = d.dets || [];
+    state.links = d.links || [];
     state.world = d.world || state.world;
     state.nextId = d.nextId || state.nextId;
     if (!groupById(ui.sel)) ui.sel = state.groups.length ? state.groups[0].id : 0;
@@ -399,6 +412,7 @@ textarea { min-height: 220px; font-family: ui-monospace, Menlo, Consolas, monosp
   }
 
   function afterChange() {
+    pruneLinks();
     save();
     renderSidebar();
     draw();
@@ -438,7 +452,7 @@ textarea { min-height: 220px; font-family: ui-monospace, Menlo, Consolas, monosp
     return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")";
   }
 
-  var hover = null, rectStart = null, rectEnd = null;
+  var hover = null, rectStart = null, rectEnd = null, linkFrom = null;
 
   function draw() {
     var w = cv.width / dpr, h = cv.height / dpr;
@@ -490,7 +504,18 @@ textarea { min-height: 220px; font-family: ui-monospace, Menlo, Consolas, monosp
     ctx.lineWidth = Math.max(1, s / 8);
     ctx.strokeRect(cx + s * 0.2, cz + s * 0.2, s * 0.6, s * 0.6);
 
+    for (var li = 0; li < state.links.length; li++) drawLink(state.links[li], colors);
+    if (linkFrom && hover) {
+      ctx.strokeStyle = css("--accent");
+      ctx.lineWidth = Math.max(2, s * 0.2);
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(view.ox + (linkFrom.x + 0.5) * s, view.oy + (linkFrom.z + 0.5) * s);
+      ctx.lineTo(view.ox + (hover.x + 0.5) * s, view.oy + (hover.z + 0.5) * s);
+      ctx.stroke();
+    }
     for (var k = 0; k < state.ctrls.length; k++) drawCtrl(state.ctrls[k], colors);
+    for (var di = 0; di < state.dets.length; di++) drawDet(state.dets[di], colors);
 
     if (rectStart && rectEnd) {
       var ax = Math.min(rectStart.x, rectEnd.x), az = Math.min(rectStart.z, rectEnd.z);
@@ -513,6 +538,42 @@ textarea { min-height: 220px; font-family: ui-monospace, Menlo, Consolas, monosp
       ctx.strokeRect(view.ox + hover.x * s, view.oy + hover.z * s, s, s);
     }
     drawRulers(w, h);
+  }
+
+  function drawLink(l, colors) {
+    var s = view.scale, c = ctrlAt(l.cx, l.cz), w = Math.max(1.5, s * 0.18);
+    ctx.beginPath();
+    ctx.moveTo(view.ox + (l.dx + 0.5) * s, view.oy + (l.dz + 0.5) * s);
+    ctx.lineTo(view.ox + (l.cx + 0.5) * s, view.oy + (l.cz + 0.5) * s);
+    ctx.strokeStyle = "rgba(255,255,255,0.85)";
+    ctx.lineWidth = w + 3;
+    ctx.stroke();
+    ctx.strokeStyle = (c && colors[c.group]) || "#888888";
+    ctx.lineWidth = w;
+    ctx.setLineDash([Math.max(3, s * 0.6), Math.max(2, s * 0.35)]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  function drawDet(d, colors) {
+    var s = view.scale;
+    var mx = view.ox + (d.x + 0.5) * s, my = view.oy + (d.z + 0.5) * s;
+    var feeds = feedsOf(d);
+    var r = s / 2 - Math.max(1, s * 0.06);
+    ctx.fillStyle = feeds.length ? (colors[feeds[0].group] || "#888888") : "#9ca3af";
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = Math.max(1, s * 0.1);
+    ctx.beginPath();
+    ctx.moveTo(mx, my - r); ctx.lineTo(mx + r, my); ctx.lineTo(mx, my + r); ctx.lineTo(mx - r, my);
+    ctx.closePath();
+    ctx.fill(); ctx.stroke();
+    if (s >= 12) {
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "700 " + Math.floor(s * 0.38) + "px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("O2", mx, my + 1);
+    }
   }
 
   function drawCtrl(c, colors) {
@@ -652,6 +713,38 @@ textarea { min-height: 220px; font-family: ui-monospace, Menlo, Consolas, monosp
       openPop(cell.x, cell.z, p.px, p.py);
       return;
     }
+    if (ui.tool === "det") {
+      if (!inMap(cell.x, cell.z) || terrain[idx(cell.x, cell.z)] === 0) return;
+      var have = detAt(cell.x, cell.z);
+      if (!have && ctrlAt(cell.x, cell.z)) return toast("A computer is already on that block.");
+      pushUndo();
+      if (have) {
+        state.dets = state.dets.filter(function (o) { return o !== have; });
+        toast("Detector removed.");
+      } else {
+        state.dets.push({ x: cell.x, z: cell.z });
+      }
+      afterChange();
+      return;
+    }
+    if (ui.tool === "link") {
+      if (!inMap(cell.x, cell.z)) return;
+      var ld = detAt(cell.x, cell.z), lc = ctrlAt(cell.x, cell.z);
+      if (!ld && !lc) return toast("Start on a detector or a computer.");
+      if (e.shiftKey) {
+        var gone = ld ? linksOfDet(ld) : linksOfCtrl(lc);
+        if (!gone.length) return toast("Nothing is linked there.");
+        pushUndo();
+        state.links = state.links.filter(function (l) { return gone.indexOf(l) < 0; });
+        afterChange();
+        return toast("Removed " + gone.length + (gone.length === 1 ? " link." : " links."));
+      }
+      linkFrom = { x: cell.x, z: cell.z, det: !!ld };
+      drag = { mode: "link" };
+      hover = cell;
+      draw();
+      return;
+    }
     if (ui.tool === "fill") {
       if (!g) return toast("Add a group first.");
       var before = snapshot();
@@ -699,6 +792,30 @@ textarea { min-height: 220px; font-family: ui-monospace, Menlo, Consolas, monosp
 
   function endDrag() {
     if (!drag) return;
+    if (drag.mode === "link") {
+      var to = hover, from = linkFrom;
+      linkFrom = null;
+      drag = null;
+      if (to && inMap(to.x, to.z) && (to.x !== from.x || to.z !== from.z)) {
+        var d = from.det ? detAt(from.x, from.z) : detAt(to.x, to.z);
+        var c = from.det ? ctrlAt(to.x, to.z) : ctrlAt(from.x, from.z);
+        if (!d || !c) { toast(from.det ? "Let go on a computer." : "Let go on a detector."); }
+        else {
+          var old = state.links.filter(function (l) { return l.dx === d.x && l.dz === d.z && l.cx === c.x && l.cz === c.z; })[0];
+          pushUndo();
+          if (old) {
+            state.links = state.links.filter(function (l) { return l !== old; });
+            toast("Unlinked from " + ctrlName(c) + ".");
+          } else {
+            state.links.push({ dx: d.x, dz: d.z, cx: c.x, cz: c.z });
+            toast("Detector now feeds " + ctrlName(c) + ".");
+          }
+          afterChange();
+        }
+      }
+      draw();
+      return;
+    }
     if (drag.mode === "paint" && drag.changed) {
       undoStack.push(drag.before); redoStack.length = 0;
       afterChange();
@@ -749,7 +866,15 @@ textarea { min-height: 220px; font-family: ui-monospace, Menlo, Consolas, monosp
     var g = groupById(state.cover[idx(cell.x, cell.z)]);
     if (g) lines.push('<span class="k">Covered by</span> ' + escapeHtml(g.name));
     var c = ctrlAt(cell.x, cell.z);
-    if (c) lines.push('<span class="k">Controller</span> ' + escapeHtml(ctrlName(c)) + ' (' + (c.role === "sensor" ? "oxygen sensor" : "door") + (c.computerId != null ? ", #" + c.computerId : "") + ')');
+    if (c) {
+      var fed = linksOfCtrl(c).length;
+      lines.push('<span class="k">Controller</span> ' + escapeHtml(ctrlName(c)) + ' (' + (c.role === "sensor" ? "oxygen sensor" : "door") + (c.computerId != null ? ", #" + c.computerId : "") + ')' + (fed ? ', fed by ' + fed + (fed === 1 ? " detector" : " detectors") : ""));
+    }
+    var dt = detAt(cell.x, cell.z);
+    if (dt) {
+      var names = feedsOf(dt).map(ctrlName);
+      lines.push('<span class="k">Oxygen detector</span> ' + (names.length ? "feeds " + escapeHtml(names.join(", ")) : "not linked yet"));
+    }
     el.innerHTML = lines.join("<br>");
   }
 
@@ -759,6 +884,7 @@ textarea { min-height: 220px; font-family: ui-monospace, Menlo, Consolas, monosp
   var popCell = null, popEdit = null;
 
   function openPop(x, z, px, py) {
+    if (!ctrlAt(x, z) && detAt(x, z)) { toast("An oxygen detector is already on that block."); return; }
     popCell = { x: x, z: z };
     popEdit = ctrlAt(x, z);
     var sel = document.getElementById("pGroup");
@@ -895,6 +1021,13 @@ textarea { min-height: 220px; font-family: ui-monospace, Menlo, Consolas, monosp
     if (!mine.some(function (c) { return c.role === "sensor"; })) problems.push("No oxygen sensor yet (usually " + g.name + "-C).");
     if (!mine.some(function (c) { return c.role === "door"; })) problems.push("No doors yet (usually " + g.name + "-A and -B).");
     if (!counts[g.id]) problems.push("No coverage painted yet.");
+    if (state.dets.length) {
+      mine.forEach(function (c) {
+        if (c.role === "sensor" && !linksOfCtrl(c).length) problems.push("No oxygen detector feeds " + ctrlName(c) + " yet.");
+      });
+    }
+    var loose = state.dets.filter(function (d) { return !linksOfDet(d).length; }).length;
+    if (loose) problems.push(loose + (loose === 1 ? " oxygen detector is" : " oxygen detectors are") + " not linked to a computer.");
     mine.forEach(function (c) {
       if (c.role === "sensor" && c.letter !== "C") problems.push(ctrlName(c) + " is a sensor but ZelNet treats only -C as the sensor by name; set its job on the computer to Oxygen sensor.");
     });
@@ -902,7 +1035,7 @@ textarea { min-height: 220px; font-family: ui-monospace, Menlo, Consolas, monosp
     mine.forEach(function (c) {
       var d = document.createElement("div");
       d.className = "ctrl";
-      d.innerHTML = "<div><b>" + escapeHtml(ctrlName(c)) + "</b> " + (c.role === "sensor" ? "oxygen sensor" : "door") + (c.computerId != null ? " &middot; #" + c.computerId : "") + (c.note ? '<div class="where">' + escapeHtml(c.note) + "</div>" : "") + '</div><div class="where">x ' + relX(c.x) + ", z " + relZ(c.z) + "</div>";
+      d.innerHTML = "<div><b>" + escapeHtml(ctrlName(c)) + "</b> " + (c.role === "sensor" ? "oxygen sensor" : "door") + (c.computerId != null ? " &middot; #" + c.computerId : "") + (linksOfCtrl(c).length ? " &middot; " + linksOfCtrl(c).length + " O2" : "") + (c.note ? '<div class="where">' + escapeHtml(c.note) + "</div>" : "") + '</div><div class="where">x ' + relX(c.x) + ", z " + relZ(c.z) + "</div>";
       d.addEventListener("click", function () {
         var s = view.scale, r = stage.getBoundingClientRect();
         view.ox = r.width / 2 - (c.x + 0.5) * s;
@@ -923,10 +1056,13 @@ textarea { min-height: 220px; font-family: ui-monospace, Menlo, Consolas, monosp
       rect: "Drag a rectangle to paint every floor block inside it.",
       erase: "Drag to remove coverage. Hold Shift and drag for a rectangle.",
       ctrl: "Click the block a computer sits on to place or edit it.",
+      det: "Click a block to place an oxygen detector. Click a detector again to remove it.",
+      link: "Drag from a detector to the computer it feeds. Drag the same pair again to unlink. Shift-click a detector or computer to clear its links.",
       pan: "Drag to move the map. You can also drag with the right mouse button or hold Space with any tool."
     };
     document.getElementById("toolHint").textContent = hints[t] || "";
     cv.style.cursor = t === "pan" ? "grab" : "crosshair";
+    linkFrom = null;
   }
   document.querySelectorAll("#tools .btn").forEach(function (b) { b.addEventListener("click", function () { setTool(b.getAttribute("data-tool")); }); });
 
@@ -1027,20 +1163,27 @@ textarea { min-height: 220px; font-family: ui-monospace, Menlo, Consolas, monosp
         if (c.computerId != null) o.computerId = c.computerId;
         if (c.note) o.note = c.note;
         if (state.world.set) o.world = { x: state.world.x + relX(c.x), y: state.world.y, z: state.world.z + relZ(c.z) };
+        var fed = linksOfCtrl(c);
+        if (fed.length) o.detectors = fed.map(function (l) { return [relX(l.dx), relZ(l.dz)]; });
         return o;
       });
       return { name: g.name, color: g.color, blocks: cells.length, cells: cells, controllers: ctrls };
     });
     return {
       format: "zelnet-station-map",
-      version: 1,
+      version: 2,
       station: "Station Athena",
       coordinates: "x east, z south, relative to the Ender Chest stack in the middle of the hub",
       size: { width: W, height: H, minX: OX, minZ: OZ },
       world: state.world.set ? { x: state.world.x, y: state.world.y, z: state.world.z } : null,
       legend: { "#": "wall", ".": "floor", " ": "outside" },
       map: MAP,
-      groups: groups
+      groups: groups,
+      detectors: state.dets.map(function (d) {
+        var o = { x: relX(d.x), z: relZ(d.z), feeds: feedsOf(d).map(ctrlName) };
+        if (state.world.set) o.world = { x: state.world.x + relX(d.x), y: state.world.y, z: state.world.z + relZ(d.z) };
+        return o;
+      })
     };
   }
 
@@ -1057,7 +1200,7 @@ textarea { min-height: 220px; font-family: ui-monospace, Menlo, Consolas, monosp
     var text = JSON.stringify(exportData(), null, 1);
     var wrap = document.createElement("div");
     var p = document.createElement("p"); p.className = "hint";
-    p.textContent = "This holds the whole map, every group's coverage and every controller. Download it or copy it, then give it to Claude to build the monitor graphic.";
+    p.textContent = "This holds the whole map, every group's coverage, every controller and every oxygen detector with the computers it feeds. Download it or copy it, then give it to Claude to build the monitor graphic.";
     var ta = document.createElement("textarea"); ta.value = text; ta.readOnly = true;
     wrap.appendChild(p); wrap.appendChild(ta);
     openModal("Export for ZelNet", wrap, [
@@ -1075,7 +1218,7 @@ textarea { min-height: 220px; font-family: ui-monospace, Menlo, Consolas, monosp
 
   function importData(d) {
     if (!d || d.format !== "zelnet-station-map" || !Array.isArray(d.groups)) throw new Error("This is not an Athena map export.");
-    var groups = [], cover = new Int16Array(W * H), ctrls = [], nextId = 1;
+    var groups = [], cover = new Int16Array(W * H), ctrls = [], nextId = 1, byName = {};
     d.groups.forEach(function (g) {
       var id = nextId++;
       groups.push({ id: id, name: String(g.name || ("Group " + id)).slice(0, 32), color: /^#[0-9a-fA-F]{6}$/.test(g.color) ? g.color : PALETTE[(id - 1) % PALETTE.length] });
@@ -1086,11 +1229,23 @@ textarea { min-height: 220px; font-family: ui-monospace, Menlo, Consolas, monosp
       (g.controllers || []).forEach(function (c) {
         var x = c.x - OX, z = c.z - OZ;
         if (!inMap(x, z)) return;
-        ctrls.push({ x: x, z: z, group: id, letter: String(c.letter || "A").toUpperCase().slice(0, 3), role: c.role === "sensor" ? "sensor" : "door", computerId: c.computerId != null ? Number(c.computerId) : null, note: c.note ? String(c.note).slice(0, 60) : "" });
+        var rec = { x: x, z: z, group: id, letter: String(c.letter || "A").toUpperCase().slice(0, 3), role: c.role === "sensor" ? "sensor" : "door", computerId: c.computerId != null ? Number(c.computerId) : null, note: c.note ? String(c.note).slice(0, 60) : "" };
+        ctrls.push(rec);
+        byName[(groups[groups.length - 1].name + "-" + rec.letter).toLowerCase()] = rec;
+      });
+    });
+    var dets = [], links = [];
+    (Array.isArray(d.detectors) ? d.detectors : []).forEach(function (o) {
+      var x = Number(o.x) - OX, z = Number(o.z) - OZ;
+      if (!inMap(x, z) || dets.some(function (q) { return q.x === x && q.z === z; })) return;
+      dets.push({ x: x, z: z });
+      (Array.isArray(o.feeds) ? o.feeds : []).forEach(function (n) {
+        var c = byName[String(n).toLowerCase()];
+        if (c) links.push({ dx: x, dz: z, cx: c.x, cz: c.z });
       });
     });
     pushUndo();
-    state.groups = groups; state.cover = cover; state.ctrls = ctrls; state.nextId = nextId;
+    state.groups = groups; state.cover = cover; state.ctrls = ctrls; state.dets = dets; state.links = links; state.nextId = nextId;
     if (d.world && typeof d.world.x === "number") state.world = { x: d.world.x, y: d.world.y || 64, z: d.world.z, set: true };
     ui.sel = groups.length ? groups[0].id : 0;
     afterChange();
@@ -1161,10 +1316,12 @@ textarea { min-height: 220px; font-family: ui-monospace, Menlo, Consolas, monosp
       '</div>';
     openModal("Settings", wrap, [
       { label: "Clear all coverage", danger: true, run: function () {
-        confirmBox("Clear everything?", "All painted coverage and all controllers are removed. Groups stay. You can undo this.", "Clear", function () {
+        confirmBox("Clear everything?", "All painted coverage, controllers and oxygen detectors are removed. Groups stay. You can undo this.", "Clear", function () {
           pushUndo();
           state.cover = new Int16Array(W * H);
           state.ctrls = [];
+          state.dets = [];
+          state.links = [];
           afterChange();
         });
         return false;
@@ -1204,7 +1361,7 @@ textarea { min-height: 220px; font-family: ui-monospace, Menlo, Consolas, monosp
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); return; }
     if (e.key === " ") { spaceDown = true; cv.style.cursor = "grab"; e.preventDefault(); return; }
-    var map = { b: "brush", f: "fill", r: "rect", e: "erase", c: "ctrl", h: "pan" };
+    var map = { b: "brush", f: "fill", r: "rect", e: "erase", c: "ctrl", o: "det", l: "link", h: "pan" };
     var k = e.key.toLowerCase();
     if (map[k]) setTool(map[k]);
     if (k === "[") setSize(ui.size === 5 ? 3 : 1);
