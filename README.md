@@ -81,7 +81,7 @@ Put a pocket computer in the server's setup drive, unlock the console, and on th
 
 ### 4. Airlocks
 
-An airlock computer needs a modem (wireless, or wired on the server's cable) and redstone from an oxygen detector. Doors also drive the airlock block from a second side. Put a pocket computer in the setup drive and tap **Airlock** on the setup monitor (or use **Devices, New, Airlock** on the console). Put the pocket in a drive next to the airlock computer and reboot it. The first start asks:
+An airlock computer needs a modem and redstone from an oxygen detector. It can be within wireless range of the server, on the server's cable, or within wireless range of any ZelNet router; routers pass airlock traffic to their server and back, so airlocks work anywhere the network reaches. Doors also drive the airlock block from a second side. Put a pocket computer in the setup drive and tap **Airlock** on the setup monitor (or use **Devices, New, Airlock** on the console). Put the pocket in a drive next to the airlock computer and reboot it. The first start asks:
 
 * **Door or oxygen sensor.** Doors open and seal; a sensor only reports the air in the chamber.
 * **A name.** Doors of one airlock share a name ending in a letter (`dock-A`, `dock-B`); the chamber sensor ends in `-C` (`dock-C`).

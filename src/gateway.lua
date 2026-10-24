@@ -16,6 +16,10 @@ M.SEEN_REPORT = 60
 M.MAX_TRACKED = 500
 M.INBOX_MAX = 64
 M.OPS = { hello = true, ping = true, send = true, publish = true, subscribe = true, unsubscribe = true }
+M.ALK_PORT = "zn.alk"
+M.ALK_FROM_NODE = { alk_register = true, alk_hello = true, alk_status = true, alk_status_reply = true }
+M.ALK_MAX = 1024
+M.BROADCAST = 65535
 
 function M.dataSize(data)
     if data == nil then return 0 end
@@ -74,11 +78,12 @@ function M.new(node, opts)
     self.backend = opts.backend
     self.log = opts.log or node.log
     self.isOff = opts.isOff or function() return false end
+    self.relay = opts.relay
     self.rate = {}
     self.reported = {}
     self.sides = {}
     self.inbox = {}
-    self.stats = { rx = 0, tx = 0, dropped = 0 }
+    self.stats = { rx = 0, tx = 0, dropped = 0, relayed = 0 }
     self.hostname = "zelnet-" .. tostring(self.realm) .. "-" .. tostring(self.myId)
     return self
 end
@@ -99,12 +104,12 @@ function Gateway:openModems()
     return true
 end
 
-function Gateway:transmit(cid, msg)
+function Gateway:transmit(cid, msg, raw)
     cid = tonumber(cid)
     if not cid or #self.sides == 0 then return false end
     self.seq = (self.seq or 0) + 1
     local mid = (self.myId * 7919 + self.seq * 104729 + math.random(0, 65535)) % 2147483646 + 1
-    local packet = { nMessageID = mid, nRecipient = cid, message = msg, sProtocol = M.PROTOCOL }
+    local packet = { nMessageID = mid, nRecipient = cid, message = msg, sProtocol = (not raw) and M.PROTOCOL or nil }
     local sent = false
     for _, side in ipairs(self.sides) do
         if pcall(peripheral.call, side, "transmit", cid, self.myId, packet) then sent = true end
@@ -137,6 +142,19 @@ function Gateway:noteSeen(cid)
     if not last and util.count(self.reported) >= M.MAX_TRACKED then self.reported = {} end
     self.reported[cid] = now
     self.backend.seen(cid)
+end
+
+function Gateway:relayAirlock(cid, msg)
+    cid = tonumber(cid)
+    if not cid or not self.relay or type(msg) ~= "table" or not M.ALK_FROM_NODE[msg.type] then return end
+    local size = M.dataSize(msg)
+    if not size or size > M.ALK_MAX then return end
+    if not self:allow(cid) then
+        self.stats.dropped = self.stats.dropped + 1
+        return
+    end
+    self.stats.relayed = self.stats.relayed + 1
+    self.relay(cid, msg)
 end
 
 function Gateway:handle(cid, msg)
@@ -200,9 +218,10 @@ function Gateway:run()
             self.log.info("public gateway " .. self.hostname .. " on " .. table.concat(self.sides, ", "))
             while true do
                 local ev, sender, message, protocol = os.pullEventRaw()
-                if ev == "rednet_message" and protocol == M.PROTOCOL then
+                local alk = ev == "rednet_message" and self.relay and protocol == nil and type(message) == "table" and M.ALK_FROM_NODE[message.type]
+                if ev == "rednet_message" and (protocol == M.PROTOCOL or alk) then
                     if #self.inbox < M.INBOX_MAX then
-                        self.inbox[#self.inbox + 1] = { sender, message }
+                        self.inbox[#self.inbox + 1] = { sender, message, alk = alk and true or nil }
                         os.queueEvent("zn_gw")
                     else
                         self.stats.dropped = self.stats.dropped + 1
@@ -221,7 +240,7 @@ function Gateway:work()
     while true do
         while #self.inbox > 0 do
             local item = table.remove(self.inbox, 1)
-            local ok, err = pcall(self.handle, self, item[1], item[2])
+            local ok, err = pcall(item.alk and self.relayAirlock or self.handle, self, item[1], item[2])
             if not ok then self.log.warn("public gateway: " .. tostring(err)) end
         end
         os.pullEventRaw("zn_gw")
@@ -234,7 +253,7 @@ function Gateway:start()
 end
 
 function Gateway:status()
-    return { hostname = self.hostname, sides = self.sides, rx = self.stats.rx, tx = self.stats.tx, dropped = self.stats.dropped }
+    return { hostname = self.hostname, sides = self.sides, rx = self.stats.rx, tx = self.stats.tx, dropped = self.stats.dropped, relayed = self.stats.relayed }
 end
 
 return M

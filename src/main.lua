@@ -396,6 +396,7 @@ function M.attachGateway(n, cfg)
     local function toServer(body) n:send(n.realm, gateway.CONTROL, body) end
     local gw = gateway.new(n, {
         isOff = function() return cfg.publicGateway == false end,
+        relay = function(cid, msg) n:send(n.realm, gateway.ALK_PORT, { cid = cid, msg = msg }) end,
         backend = {
             seen = function(cid) toServer({ op = "seen", cid = cid }) end,
             blocked = function() return false end,
@@ -408,6 +409,16 @@ function M.attachGateway(n, cfg)
         local b = msg.data
         if not a or a.realm ~= n.realm or a.id or a.name or type(b) ~= "table" then return end
         if b.op == "deliver" then gw:transmit(b.cid, b.msg) end
+    end)
+    n:listen(gateway.ALK_PORT, function(msg)
+        local a = util.parseAddress(msg.src)
+        local b = msg.data
+        if not a or a.realm ~= n.realm or a.id or a.name or type(b) ~= "table" or type(b.msg) ~= "table" then return end
+        if b.op == "deliver" then
+            gw:transmit(b.cid, b.msg, true)
+        elseif b.op == "broadcast" then
+            gw:transmit(gateway.BROADCAST, b.msg, true)
+        end
     end)
     gw:start()
     return gw

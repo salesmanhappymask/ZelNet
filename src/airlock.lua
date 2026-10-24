@@ -15,6 +15,8 @@ M.NAME_MAX = 32
 M.MAX_NODES = 256
 M.MODES = { seal = true, unseal = true, auto = true }
 M.IGNORED = { alk_ack = true, alk_cmd = true, alk_poll = true, alk_discover = true }
+M.RELAY_PORT = "zn.alk"
+M.PATH_HOLD = 600
 
 local Airlock = {}
 Airlock.__index = Airlock
@@ -70,6 +72,11 @@ function Airlock:rednet()
 end
 
 function Airlock:rsend(id, msg)
+    local rec = self.nodes[tostring(id)]
+    if rec and rec.via and self.node then
+        self.node:send(rec.via, M.RELAY_PORT, { op = "deliver", cid = tonumber(id), msg = msg })
+        return true
+    end
     local r = self:rednet()
     if not r or type(r.send) ~= "function" then return false end
     local ok, err = pcall(r.send, tonumber(id) or id, msg)
@@ -77,10 +84,54 @@ function Airlock:rsend(id, msg)
     return ok
 end
 
+function Airlock:routers()
+    local srv = self.ctx.server
+    local out = {}
+    if not srv or not srv.reg or type(srv.reg.devices) ~= "table" then return out end
+    for name, rec in pairs(srv.reg.devices) do
+        if rec.role == "router" and rec.cid and rec.status ~= "revoked" then
+            local st = srv.reg.statusOf and srv.reg:statusOf(name)
+            if st == nil or st == "online" then out[#out + 1] = rec.cid end
+        end
+    end
+    return out
+end
+
 function Airlock:rbroadcast(msg)
+    if self.node and self.cfg.realm then
+        for _, cid in ipairs(self:routers()) do
+            self.node:send(self.cfg.realm .. ":" .. cid, M.RELAY_PORT, { op = "broadcast", msg = msg })
+        end
+    end
     local r = self:rednet()
     if not r or type(r.broadcast) ~= "function" then return false end
     return (pcall(r.broadcast, msg))
+end
+
+function Airlock:onRelay(msg)
+    local srv = self.ctx.server
+    local dev = srv and srv.deviceFromSrc and srv:deviceFromSrc(msg.src)
+    if not dev or dev.role ~= "router" then return end
+    local b = msg.data
+    if type(b) ~= "table" or type(b.msg) ~= "table" or not tonumber(b.cid) then return end
+    self.counters.relayed = (self.counters.relayed or 0) + 1
+    self:handleMessage(tonumber(b.cid), b.msg, msg.src)
+end
+
+function Airlock:choosePath(rec, via, now)
+    if via then
+        if rec.directAt and now - rec.directAt < M.PATH_HOLD then return false end
+        if rec.via and rec.via ~= via and rec.viaAt and now - rec.viaAt < M.PATH_HOLD then return false end
+        if rec.via ~= via then self:changed(rec, true) end
+        rec.via = via
+        rec.viaAt = now
+    else
+        if rec.via then self:changed(rec, true) end
+        rec.via = nil
+        rec.viaAt = nil
+        rec.directAt = now
+    end
+    return true
 end
 
 function Airlock:openRednet()
@@ -142,6 +193,7 @@ function Airlock:load()
                     manual = (r.manual == "seal" or r.manual == "unseal") and r.manual or nil,
                     sealed = r.sealed == true, lockSync = r.lockSync, named = r.named == true or nil,
                     online = r.online ~= false, seen = tonumber(r.seen), lastSeen = now,
+                    via = type(r.via) == "string" and r.via or nil, viaAt = type(r.via) == "string" and now or nil,
                 }
                 if type(rec.oxygenated) ~= "boolean" then rec.oxygenated = nil end
                 if type(rec.lockSync) ~= "boolean" then rec.lockSync = nil end
@@ -173,6 +225,7 @@ function Airlock:snapshot()
         out[key] = {
             id = r.id, name = r.name, role = r.role, oxygenated = r.oxygenated, locked = r.locked,
             manual = r.manual, sealed = r.sealed, lockSync = r.lockSync, named = r.named, online = r.online, seen = r.seen,
+            via = r.via,
         }
     end
     return { v = 1, nodes = out }
@@ -240,7 +293,7 @@ function Airlock:applyGroup(group)
     end
 end
 
-function Airlock:handleMessage(senderID, msg)
+function Airlock:handleMessage(senderID, msg, via)
     if type(msg) ~= "table" or type(msg.type) ~= "string" or msg.type:sub(1, 4) ~= "alk_" then return false end
     if M.IGNORED[msg.type] then
         self.counters.ignored = self.counters.ignored + 1
@@ -254,6 +307,10 @@ function Airlock:handleMessage(senderID, msg)
     local isNew = rec == nil
     if isNew and util.count(self.nodes) >= M.MAX_NODES then return false end
     rec = rec or { id = id }
+    if not self:choosePath(rec, via, compat.now()) then
+        self.counters.ignored = self.counters.ignored + 1
+        return false
+    end
     local wasOnline, oldOxy, oldName, oldRole, oldGroup = rec.online, rec.oxygenated, rec.name, rec.role, rec.group
     local nm = cleanName(msg.name)
     if nm ~= "" and not rec.named then rec.name = nm end
@@ -511,6 +568,7 @@ function Airlock:start()
     end
     self:load()
     if self.node then
+        self.node:listen(M.RELAY_PORT, function(msg) self:onRelay(msg) end)
         self.task = self.node:spawn(function() self:run() end, "airlock")
     end
     return true
