@@ -1,0 +1,1239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Athena Airlock Map</title>
+<style>
+:root {
+  --paper: #f6f3ea;
+  --grid: rgba(60, 70, 90, 0.10);
+  --grid-major: rgba(60, 70, 90, 0.26);
+  --floor: #ffffff;
+  --wall: #4b5563;
+  --wall-edge: #374151;
+  --ink: #1f2937;
+  --muted: #6b7280;
+  --panel: #ffffff;
+  --panel-2: #f3f4f6;
+  --line: #e5e7eb;
+  --accent: #2563eb;
+  --accent-ink: #ffffff;
+  --warn: #b45309;
+  --bad: #b91c1c;
+  --ok: #15803d;
+  --shadow: 0 1px 2px rgba(0,0,0,0.06), 0 4px 16px rgba(0,0,0,0.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #15181e;
+    --grid: rgba(200, 210, 230, 0.07);
+    --grid-major: rgba(200, 210, 230, 0.18);
+    --floor: #232833;
+    --wall: #8b95a7;
+    --wall-edge: #aab3c3;
+    --ink: #e5e7eb;
+    --muted: #9ca3af;
+    --panel: #1b1f27;
+    --panel-2: #232833;
+    --line: #2e3440;
+    --accent: #3b82f6;
+    --accent-ink: #ffffff;
+    --warn: #f59e0b;
+    --bad: #f87171;
+    --ok: #4ade80;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 4px 16px rgba(0,0,0,0.3);
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #15181e;
+  --grid: rgba(200, 210, 230, 0.07);
+  --grid-major: rgba(200, 210, 230, 0.18);
+  --floor: #232833;
+  --wall: #8b95a7;
+  --wall-edge: #aab3c3;
+  --ink: #e5e7eb;
+  --muted: #9ca3af;
+  --panel: #1b1f27;
+  --panel-2: #232833;
+  --line: #2e3440;
+  --accent: #3b82f6;
+  --accent-ink: #ffffff;
+  --warn: #f59e0b;
+  --bad: #f87171;
+  --ok: #4ade80;
+  --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 4px 16px rgba(0,0,0,0.3);
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  overflow: hidden;
+}
+header {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+}
+header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: 0.2px; }
+header .sub { color: var(--muted); font-size: 13px; }
+header .spacer { flex: 1; }
+.btn {
+  appearance: none; border: 1px solid var(--line); background: var(--panel-2); color: var(--ink);
+  padding: 6px 10px; border-radius: 8px; font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap;
+}
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn.danger { color: var(--bad); }
+.btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn:disabled { opacity: 0.45; cursor: default; }
+main { display: grid; grid-template-columns: 300px 1fr; min-height: 0; }
+aside {
+  background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; padding: 12px 14px 24px;
+}
+aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); margin: 18px 0 8px; font-weight: 650; }
+aside h2:first-child { margin-top: 4px; }
+.tools { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.tools .btn { padding: 7px 4px; }
+.row { display: flex; align-items: center; gap: 8px; margin: 8px 0; flex-wrap: wrap; }
+.row label { color: var(--muted); font-size: 13px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; background: var(--panel-2); color: var(--ink); padding: 5px 10px; font: inherit; font-size: 13px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.check { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 6px 0; cursor: pointer; }
+.groups { display: flex; flex-direction: column; gap: 4px; }
+.group {
+  display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 8px; border: 1px solid transparent; cursor: pointer;
+}
+.group:hover { background: var(--panel-2); }
+.group.sel { border-color: var(--accent); background: var(--panel-2); }
+.swatch { width: 22px; height: 22px; border-radius: 6px; border: 1px solid rgba(0,0,0,0.15); padding: 0; cursor: pointer; }
+.swatch input { opacity: 0; width: 100%; height: 100%; cursor: pointer; border: 0; padding: 0; }
+.gname { min-width: 0; }
+.gname .n { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gname .m { color: var(--muted); font-size: 12px; }
+.badges { display: flex; gap: 3px; }
+.badge {
+  font-size: 11px; font-weight: 700; width: 18px; height: 18px; border-radius: 5px;
+  display: grid; place-items: center; background: var(--panel-2); color: var(--muted); border: 1px solid var(--line);
+}
+.badge.on { background: var(--ok); color: #fff; border-color: var(--ok); }
+.ctrls { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.ctrl {
+  display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center;
+  padding: 6px 8px; border-radius: 8px; background: var(--panel-2); font-size: 13px; cursor: pointer;
+}
+.ctrl .where { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.warn { color: var(--warn); font-size: 12px; margin: 4px 0; }
+.hint { color: var(--muted); font-size: 12px; margin: 6px 0; }
+.stage { position: relative; min-width: 0; min-height: 0; }
+canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+.readout {
+  position: absolute; left: 12px; bottom: 12px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: 8px 12px; box-shadow: var(--shadow); font-size: 13px; font-variant-numeric: tabular-nums;
+  pointer-events: none; min-width: 220px;
+}
+.readout .k { color: var(--muted); }
+.zoombar { position: absolute; right: 12px; bottom: 12px; display: flex; gap: 6px; }
+.compass {
+  position: absolute; right: 12px; top: 12px; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: 6px 10px; box-shadow: var(--shadow); font-size: 12px; color: var(--muted); text-align: center;
+}
+.compass b { display: block; color: var(--ink); font-size: 14px; }
+.pop {
+  position: absolute; z-index: 5; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: var(--shadow); padding: 12px; width: 260px; display: none;
+}
+.pop h3 { margin: 0 0 8px; font-size: 14px; }
+.pop .f { display: grid; grid-template-columns: 90px 1fr; gap: 6px 8px; align-items: center; margin-bottom: 10px; }
+.pop .f label { color: var(--muted); font-size: 13px; }
+input[type="text"], input[type="number"], select, textarea {
+  font: inherit; font-size: 13px; color: var(--ink); background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 7px; padding: 5px 7px; width: 100%; min-width: 0;
+}
+textarea { min-height: 220px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+.pop .acts { display: flex; gap: 6px; justify-content: flex-end; }
+.modal-back { position: fixed; inset: 0; background: rgba(0,0,0,0.35); display: none; z-index: 20; }
+.modal {
+  position: fixed; z-index: 21; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow);
+  padding: 16px; display: none;
+}
+.modal h3 { margin: 0 0 10px; font-size: 15px; }
+.modal .acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; flex-wrap: wrap; }
+.toast {
+  position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--ink); color: var(--paper);
+  padding: 8px 14px; border-radius: 9px; font-size: 13px; opacity: 0; transition: opacity 0.2s; pointer-events: none; z-index: 30;
+}
+.toast.show { opacity: 1; }
+@media (max-width: 760px) {
+  body { overflow: auto; grid-template-rows: auto auto; }
+  main { grid-template-columns: 1fr; grid-template-rows: auto 70vh; }
+  aside { border-right: 0; border-bottom: 1px solid var(--line); max-height: none; }
+  .readout { min-width: 0; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Station Athena</h1>
+  <span class="sub">Airlock coverage map &middot; 99 &times; 99 blocks, one square per block</span>
+  <span class="spacer"></span>
+  <button class="btn" id="undo" title="Undo (Ctrl+Z)">Undo</button>
+  <button class="btn" id="redo" title="Redo (Ctrl+Y)">Redo</button>
+  <button class="btn primary" id="exportJson">Export for ZelNet</button>
+  <button class="btn" id="importJson">Import</button>
+  <button class="btn" id="exportPng">Save image</button>
+  <button class="btn" id="settingsBtn">Settings</button>
+</header>
+<main>
+  <aside>
+    <h2>Tools</h2>
+    <div class="tools" id="tools">
+      <button class="btn" data-tool="brush" title="Paint coverage (B)">Paint</button>
+      <button class="btn" data-tool="fill" title="Fill a room (F)">Fill room</button>
+      <button class="btn" data-tool="rect" title="Paint a rectangle (R)">Rectangle</button>
+      <button class="btn" data-tool="erase" title="Erase coverage (E)">Erase</button>
+      <button class="btn" data-tool="ctrl" title="Place a controller (C)">Controller</button>
+      <button class="btn" data-tool="pan" title="Move the map (H, or hold Space)">Move</button>
+    </div>
+    <div class="row">
+      <label>Brush</label>
+      <div class="seg" id="brushSize">
+        <button data-size="1">1</button><button data-size="3">3</button><button data-size="5">5</button>
+      </div>
+    </div>
+    <label class="check"><input type="checkbox" id="paintWalls"> Paint over walls too</label>
+    <label class="check"><input type="checkbox" id="showUncovered"> Show floor nobody covers</label>
+    <label class="check"><input type="checkbox" id="showLabels" checked> Show controller names</label>
+    <p class="hint" id="toolHint"></p>
+
+    <h2>Airlock groups</h2>
+    <div class="groups" id="groups"></div>
+    <div class="row">
+      <button class="btn" id="addGroup">Add group</button>
+      <button class="btn" id="renameGroup">Rename</button>
+      <button class="btn danger" id="deleteGroup">Delete</button>
+    </div>
+
+    <h2 id="ctrlTitle">Controllers</h2>
+    <div id="groupWarn"></div>
+    <div class="ctrls" id="ctrls"></div>
+    <p class="hint">Pick Controller, then click the block a computer sits on. A and B are doors, C is the oxygen sensor.</p>
+  </aside>
+  <div class="stage" id="stage">
+    <canvas id="cv"></canvas>
+    <div class="compass"><b>N</b>&uarr;</div>
+    <div class="readout" id="readout"><span class="k">Point at a block</span></div>
+    <div class="zoombar">
+      <button class="btn" id="zoomOut" title="Zoom out">&minus;</button>
+      <button class="btn" id="zoomFit" title="Fit the station">Fit</button>
+      <button class="btn" id="zoomIn" title="Zoom in">+</button>
+    </div>
+    <div class="pop" id="pop">
+      <h3 id="popTitle">Controller</h3>
+      <div class="f">
+        <label for="pGroup">Group</label><select id="pGroup"></select>
+        <label for="pLetter">Letter</label><input type="text" id="pLetter" maxlength="3">
+        <label for="pRole">Job</label>
+        <select id="pRole"><option value="door">Door</option><option value="sensor">Oxygen sensor</option></select>
+        <label for="pId">Computer ID</label><input type="number" id="pId" min="0" placeholder="optional">
+        <label for="pNote">Note</label><input type="text" id="pNote" maxlength="60" placeholder="optional">
+      </div>
+      <div class="acts">
+        <button class="btn danger" id="pDelete">Remove</button>
+        <button class="btn" id="pCancel">Cancel</button>
+        <button class="btn primary" id="pSave">Save</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div class="modal-back" id="modalBack"></div>
+<div class="modal" id="modal">
+  <h3 id="modalTitle"></h3>
+  <div id="modalBody"></div>
+  <div class="acts" id="modalActs"></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  var MAP = ["                                  ###############################                                  ", "                                  #.............................#                                  ", "                                  #.............................#                                  ", "                                  #.............................#                                  ", "                                  #.............................#                                  ", "                                  #.............................#                                  ", "                                  #.............................#                                  ", "       ############################.............................############################       ", "       #...................................................................................#       ", "       #...................................................................................#       ", "       #...................................................................................#       ", "       #...########################.............................########################...#       ", "       #...#                      #.............................#                      #...#       ", "       #...#                      #.............................#                      #...#       ", "       #...#                      #.............................#                      #...#       ", "       #...#                      #.............................#                      #...#       ", "       #...#                      #.............................#                      #...#       ", "       #...#                      #.............................#                      #...#       ", "       #...#                      ##############...##############                      #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "########...########                            #...#                            ########...########", "#.................#                            #...#                            #.................#", "#.................#                            #...#                            #.................#", "#.................#                            #...#                            #.................#", "#.................#                            #...#                            #.................#", "#.................#                            #...#                            #.................#", "#.................#                            #...#                            #.................#", "#.................#                            #...#                            #.................#", "#.................#                       ######...######                       #.................#", "#.................#                       #.............#                       #.................#", "#.................#                       #.............#                       #.................#", "#.................#                       #.............#                       #.................#", "#.................#                       #.............#                       #.................#", "#.................#########################.............#########################.................#", "#.................................................................................................#", "#.................................................................................................#", "#.................................................................................................#", "#.................#########################.............#########################.................#", "#.................#                       #.............#                       #.................#", "#.................#                       #.............#                       #.................#", "#.................#                       #.............#                       #.................#", "#.................#                       #.............#                       #.................#", "#.................#                       ######...######                       #.................#", "#.................#                            #...#                            #.................#", "#.................#                            #...#                            #.................#", "#.................#                            #...#                            #.................#", "#.................#                            #...#                            #.................#", "#.................#                            #...#                            #.................#", "#.................#                            #...#                            #.................#", "#.................#                            #...#                            #.................#", "########...########                            #...#                            ########...########", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                                   #...#                                   #...#       ", "       #...#                      ##############...##############                      #...#       ", "       #...#                      #.............................#                      #...#       ", "       #...#                      #.............................#                      #...#       ", "       #...#                      #.............................#                      #...#       ", "       #...#                      #.............................#                      #...#       ", "       #...#                      #.............................#                      #...#       ", "       #...#                      #.............................#                      #...#       ", "       #...########################.............................########################...#       ", "       #...................................................................................#       ", "       #...................................................................................#       ", "       #...................................................................................#       ", "       ############################.............................############################       ", "                                  #.............................#                                  ", "                                  #.............................#                                  ", "                                  #.............................#                                  ", "                                  #.............................#                                  ", "                                  #.............................#                                  ", "                                  #.............................#                                  ", "                                  ###############################                                  "];
+  var H = MAP.length, W = MAP[0].length;
+  var OX = -Math.floor(W / 2), OZ = -Math.floor(H / 2);
+  var STORE = "athena-airlock-map-v1";
+  var PALETTE = ["#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#42d4f4", "#f032e6", "#9a6324", "#469990", "#808000", "#000075", "#bfef45"];
+
+  var terrain = new Uint8Array(W * H);
+  for (var z = 0; z < H; z++) {
+    for (var x = 0; x < W; x++) {
+      var ch = MAP[z].charAt(x);
+      terrain[z * W + x] = ch === "#" ? 2 : (ch === "." ? 1 : 0);
+    }
+  }
+
+  var zone = new Int32Array(W * H);
+  (function () {
+    var open = new Uint8Array(W * H), run = new Int32Array(W * H), x, z, a, b, i;
+    for (z = 0; z < H; z++) {
+      for (x = 0; x < W; x = b) {
+        b = x + 1;
+        if (terrain[z * W + x] !== 1) continue;
+        while (b < W && terrain[z * W + b] === 1) b++;
+        for (a = x; a < b; a++) run[z * W + a] = b - x;
+      }
+    }
+    for (x = 0; x < W; x++) {
+      for (z = 0; z < H; z = b) {
+        b = z + 1;
+        if (terrain[z * W + x] !== 1) continue;
+        while (b < H && terrain[b * W + x] === 1) b++;
+        for (a = z; a < b; a++) open[a * W + x] = Math.min(run[a * W + x], b - z) > 5 ? 1 : 0;
+      }
+    }
+    function grow(seed, kind, id) {
+      var stack = [seed], cells = [];
+      zone[seed] = id;
+      while (stack.length) {
+        var c = stack.pop(), cx = c % W, cz = (c - cx) / W;
+        cells.push(c);
+        [[cx + 1, cz], [cx - 1, cz], [cx, cz + 1], [cx, cz - 1]].forEach(function (q) {
+          if (q[0] < 0 || q[1] < 0 || q[0] >= W || q[1] >= H) return;
+          var j = q[1] * W + q[0];
+          if (zone[j] === 0 && terrain[j] === 1 && open[j] === kind) { zone[j] = id; stack.push(j); }
+        });
+      }
+      return cells;
+    }
+    var id = 0;
+    for (i = 0; i < W * H; i++) {
+      if (zone[i] === 0 && terrain[i] === 1 && open[i] === 1) {
+        var cells = grow(i, 1, ++id);
+        if (cells.length < 40) cells.forEach(function (c) { open[c] = 0; zone[c] = 0; });
+      }
+    }
+    for (i = 0; i < W * H; i++) if (zone[i] === 0 && terrain[i] === 1) grow(i, open[i], ++id);
+  })();
+
+  var state = {
+    groups: [],
+    cover: new Int16Array(W * H),
+    ctrls: [],
+    world: { x: 0, y: 64, z: 0, set: false },
+    nextId: 1
+  };
+  var ui = { tool: "brush", size: 1, sel: 0, paintWalls: false, showUncovered: false, showLabels: true };
+  var view = { scale: 8, ox: 0, oy: 0 };
+  var undoStack = [], redoStack = [];
+
+  function defaultGroups() {
+    var out = [];
+    for (var i = 1; i <= 8; i++) {
+      out.push({ id: state.nextId++, name: i === 1 ? "Athena" : "Athena" + i, color: PALETTE[i - 1] });
+    }
+    return out;
+  }
+
+  function idx(x, z) { return z * W + x; }
+  function inMap(x, z) { return x >= 0 && z >= 0 && x < W && z < H; }
+  function groupById(id) { for (var i = 0; i < state.groups.length; i++) if (state.groups[i].id === id) return state.groups[i]; return null; }
+  function selGroup() { return groupById(ui.sel) || state.groups[0] || null; }
+  function relX(x) { return x + OX; }
+  function relZ(z) { return z + OZ; }
+  function ctrlName(c) { var g = groupById(c.group); return (g ? g.name : "?") + "-" + c.letter; }
+  function ctrlAt(x, z) { for (var i = 0; i < state.ctrls.length; i++) if (state.ctrls[i].x === x && state.ctrls[i].z === z) return state.ctrls[i]; return null; }
+  function paintable(x, z) { var t = terrain[idx(x, z)]; return t === 1 || (ui.paintWalls && t === 2); }
+
+  function snapshot() {
+    return JSON.stringify({ groups: state.groups, cover: Array.prototype.slice.call(state.cover), ctrls: state.ctrls, world: state.world, nextId: state.nextId });
+  }
+  function restore(text) {
+    var d = JSON.parse(text);
+    state.groups = d.groups;
+    state.cover = Int16Array.from(d.cover);
+    state.ctrls = d.ctrls;
+    state.world = d.world || state.world;
+    state.nextId = d.nextId || state.nextId;
+    if (!groupById(ui.sel)) ui.sel = state.groups.length ? state.groups[0].id : 0;
+  }
+  function pushUndo() {
+    undoStack.push(snapshot());
+    if (undoStack.length > 120) undoStack.shift();
+    redoStack.length = 0;
+    syncUndo();
+  }
+  function undo() {
+    if (!undoStack.length) return;
+    redoStack.push(snapshot());
+    restore(undoStack.pop());
+    afterChange();
+  }
+  function redo() {
+    if (!redoStack.length) return;
+    undoStack.push(snapshot());
+    restore(redoStack.pop());
+    afterChange();
+  }
+  function syncUndo() {
+    document.getElementById("undo").disabled = !undoStack.length;
+    document.getElementById("redo").disabled = !redoStack.length;
+  }
+
+  function save() {
+    try { localStorage.setItem(STORE, snapshot()); } catch (e) {}
+  }
+  function load() {
+    var text = null;
+    try { text = localStorage.getItem(STORE); } catch (e) {}
+    if (text) {
+      try { restore(text); return; } catch (e) {}
+    }
+    state.groups = defaultGroups();
+  }
+
+  function afterChange() {
+    save();
+    renderSidebar();
+    draw();
+    syncUndo();
+  }
+
+  var cv = document.getElementById("cv");
+  var ctx = cv.getContext("2d");
+  var stage = document.getElementById("stage");
+  var dpr = 1;
+
+  function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+  function resize() {
+    dpr = window.devicePixelRatio || 1;
+    var r = stage.getBoundingClientRect();
+    cv.width = Math.max(1, Math.round(r.width * dpr));
+    cv.height = Math.max(1, Math.round(r.height * dpr));
+    draw();
+  }
+
+  function fit() {
+    var r = stage.getBoundingClientRect();
+    var s = Math.max(2, Math.floor(Math.min((r.width - 60) / W, (r.height - 60) / H) * 10) / 10);
+    view.scale = s;
+    view.ox = (r.width - W * s) / 2;
+    view.oy = (r.height - H * s) / 2;
+    draw();
+  }
+
+  function toCell(px, py) {
+    return { x: Math.floor((px - view.ox) / view.scale), z: Math.floor((py - view.oy) / view.scale) };
+  }
+
+  function hexA(hex, a) {
+    var n = parseInt(hex.slice(1), 16);
+    return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")";
+  }
+
+  var hover = null, rectStart = null, rectEnd = null;
+
+  function draw() {
+    var w = cv.width / dpr, h = cv.height / dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = css("--paper");
+    ctx.fillRect(0, 0, w, h);
+    var s = view.scale;
+    var x0 = Math.max(0, Math.floor(-view.ox / s)), z0 = Math.max(0, Math.floor(-view.oy / s));
+    var x1 = Math.min(W - 1, Math.ceil((w - view.ox) / s)), z1 = Math.min(H - 1, Math.ceil((h - view.oy) / s));
+    var floor = css("--floor"), wall = css("--wall");
+    var colors = {};
+    for (var i = 0; i < state.groups.length; i++) colors[state.groups[i].id] = state.groups[i].color;
+    for (var z = z0; z <= z1; z++) {
+      for (var x = x0; x <= x1; x++) {
+        var t = terrain[idx(x, z)];
+        if (t === 0) continue;
+        var px = view.ox + x * s, py = view.oy + z * s;
+        ctx.fillStyle = t === 2 ? wall : floor;
+        ctx.fillRect(px, py, s, s);
+        var g = state.cover[idx(x, z)];
+        if (g && colors[g]) {
+          ctx.fillStyle = hexA(colors[g], t === 2 ? 0.55 : 0.42);
+          ctx.fillRect(px, py, s, s);
+        } else if (ui.showUncovered && t === 1) {
+          ctx.strokeStyle = css("--muted");
+          ctx.lineWidth = Math.max(1, s / 8);
+          ctx.beginPath();
+          ctx.moveTo(px, py + s);
+          ctx.lineTo(px + s, py);
+          ctx.stroke();
+        }
+      }
+    }
+    if (s >= 4) {
+      ctx.lineWidth = 1;
+      for (var gx = x0; gx <= x1 + 1; gx++) {
+        var lx = Math.round(view.ox + gx * s) + 0.5;
+        ctx.strokeStyle = (relX(gx) % 10 === 0) ? css("--grid-major") : css("--grid");
+        ctx.beginPath(); ctx.moveTo(lx, view.oy + z0 * s); ctx.lineTo(lx, view.oy + (z1 + 1) * s); ctx.stroke();
+      }
+      for (var gz = z0; gz <= z1 + 1; gz++) {
+        var ly = Math.round(view.oy + gz * s) + 0.5;
+        ctx.strokeStyle = (relZ(gz) % 10 === 0) ? css("--grid-major") : css("--grid");
+        ctx.beginPath(); ctx.moveTo(view.ox + x0 * s, ly); ctx.lineTo(view.ox + (x1 + 1) * s, ly); ctx.stroke();
+      }
+    }
+    var cx = view.ox + (-OX) * s, cz = view.oy + (-OZ) * s;
+    ctx.strokeStyle = css("--muted");
+    ctx.lineWidth = Math.max(1, s / 8);
+    ctx.strokeRect(cx + s * 0.2, cz + s * 0.2, s * 0.6, s * 0.6);
+
+    for (var k = 0; k < state.ctrls.length; k++) drawCtrl(state.ctrls[k], colors);
+
+    if (rectStart && rectEnd) {
+      var ax = Math.min(rectStart.x, rectEnd.x), az = Math.min(rectStart.z, rectEnd.z);
+      var bx = Math.max(rectStart.x, rectEnd.x), bz = Math.max(rectStart.z, rectEnd.z);
+      var sg = selGroup();
+      ctx.fillStyle = ui.tool === "erase" ? "rgba(0,0,0,0.12)" : hexA(sg ? sg.color : "#888888", 0.25);
+      ctx.fillRect(view.ox + ax * s, view.oy + az * s, (bx - ax + 1) * s, (bz - az + 1) * s);
+      ctx.strokeStyle = css("--accent");
+      ctx.lineWidth = 2;
+      ctx.strokeRect(view.ox + ax * s, view.oy + az * s, (bx - ax + 1) * s, (bz - az + 1) * s);
+    }
+    if (hover && inMap(hover.x, hover.z) && (ui.tool === "brush" || ui.tool === "erase")) {
+      var half = Math.floor(ui.size / 2);
+      ctx.strokeStyle = css("--accent");
+      ctx.lineWidth = 2;
+      ctx.strokeRect(view.ox + (hover.x - half) * s, view.oy + (hover.z - half) * s, ui.size * s, ui.size * s);
+    } else if (hover && inMap(hover.x, hover.z)) {
+      ctx.strokeStyle = css("--accent");
+      ctx.lineWidth = 2;
+      ctx.strokeRect(view.ox + hover.x * s, view.oy + hover.z * s, s, s);
+    }
+    drawRulers(w, h);
+  }
+
+  function drawCtrl(c, colors) {
+    var s = view.scale;
+    var px = view.ox + c.x * s, py = view.oy + c.z * s;
+    var col = colors[c.group] || "#888888";
+    var pad = Math.max(1, s * 0.08);
+    ctx.fillStyle = col;
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = Math.max(1, s * 0.1);
+    if (c.role === "sensor") {
+      ctx.beginPath();
+      ctx.arc(px + s / 2, py + s / 2, s / 2 - pad, 0, Math.PI * 2);
+      ctx.fill(); ctx.stroke();
+    } else {
+      ctx.fillRect(px + pad, py + pad, s - pad * 2, s - pad * 2);
+      ctx.strokeRect(px + pad, py + pad, s - pad * 2, s - pad * 2);
+    }
+    if (s >= 9) {
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "700 " + Math.floor(s * 0.62) + "px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(c.letter.charAt(0), px + s / 2, py + s / 2 + 1);
+    }
+    if (ui.showLabels && s >= 7) {
+      var label = ctrlName(c);
+      ctx.font = "600 " + Math.max(10, Math.min(13, Math.floor(s * 0.75))) + "px system-ui, sans-serif";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      var tw = ctx.measureText(label).width;
+      var lx = px + s + 3, ly = py + s / 2;
+      ctx.fillStyle = css("--panel");
+      ctx.globalAlpha = 0.9;
+      ctx.fillRect(lx - 2, ly - 8, tw + 4, 16);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = css("--ink");
+      ctx.fillText(label, lx, ly);
+    }
+  }
+
+  function drawRulers(w, h) {
+    var s = view.scale;
+    var step = s >= 12 ? 5 : 10;
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.fillStyle = css("--muted");
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    for (var x = 0; x < W; x++) {
+      if (relX(x) % step !== 0) continue;
+      var px = view.ox + (x + 0.5) * s;
+      if (px < 20 || px > w - 20) continue;
+      ctx.fillText(String(relX(x)), px, Math.max(4, view.oy - 18));
+    }
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    for (var z = 0; z < H; z++) {
+      if (relZ(z) % step !== 0) continue;
+      var py = view.oy + (z + 0.5) * s;
+      if (py < 20 || py > h - 20) continue;
+      ctx.fillText(String(relZ(z)), Math.max(4, view.ox - 26), py);
+    }
+  }
+
+  function setCover(x, z, val) {
+    if (!inMap(x, z)) return false;
+    if (val !== 0 && !paintable(x, z)) return false;
+    if (val === 0 && terrain[idx(x, z)] === 0) return false;
+    var i = idx(x, z);
+    if (state.cover[i] === val) return false;
+    state.cover[i] = val;
+    return true;
+  }
+
+  function brushAt(cx, cz, val) {
+    var half = Math.floor(ui.size / 2), changed = false;
+    for (var dz = -half; dz <= half; dz++) for (var dx = -half; dx <= half; dx++) changed = setCover(cx + dx, cz + dz, val) || changed;
+    return changed;
+  }
+
+  function lineBrush(a, b, val) {
+    var dx = Math.abs(b.x - a.x), dz = Math.abs(b.z - a.z);
+    var n = Math.max(dx, dz), changed = false;
+    for (var i = 0; i <= n; i++) {
+      var t = n === 0 ? 0 : i / n;
+      changed = brushAt(Math.round(a.x + (b.x - a.x) * t), Math.round(a.z + (b.z - a.z) * t), val) || changed;
+    }
+    return changed;
+  }
+
+  function floodFill(sx, sz, val) {
+    if (!inMap(sx, sz) || terrain[idx(sx, sz)] !== 1) return 0;
+    var start = state.cover[idx(sx, sz)];
+    var target = start;
+    if (target === val) return 0;
+    var stack = [[sx, sz]], n = 0, seen = new Uint8Array(W * H);
+    while (stack.length) {
+      var p = stack.pop(), x = p[0], z = p[1];
+      if (!inMap(x, z)) continue;
+      var i = idx(x, z);
+      if (seen[i]) continue;
+      seen[i] = 1;
+      if (terrain[i] !== 1 || zone[i] !== zone[idx(sx, sz)] || state.cover[i] !== target) continue;
+      state.cover[i] = val;
+      n++;
+      stack.push([x + 1, z], [x - 1, z], [x, z + 1], [x, z - 1]);
+    }
+    return n;
+  }
+
+  function rectFill(a, b, val) {
+    var ax = Math.min(a.x, b.x), az = Math.min(a.z, b.z), bx = Math.max(a.x, b.x), bz = Math.max(a.z, b.z), changed = false;
+    for (var z = az; z <= bz; z++) for (var x = ax; x <= bx; x++) changed = setCover(x, z, val) || changed;
+    return changed;
+  }
+
+  var drag = null, spaceDown = false;
+
+  function pointerPos(e) {
+    var r = cv.getBoundingClientRect();
+    return { px: e.clientX - r.left, py: e.clientY - r.top };
+  }
+
+  cv.addEventListener("pointerdown", function (e) {
+    hidePop();
+    var p = pointerPos(e);
+    var cell = toCell(p.px, p.py);
+    cv.setPointerCapture(e.pointerId);
+    if (e.button === 1 || e.button === 2 || ui.tool === "pan" || spaceDown) {
+      drag = { mode: "pan", sx: p.px, sy: p.py, ox: view.ox, oy: view.oy };
+      return;
+    }
+    if (e.button !== 0) return;
+    var g = selGroup();
+    if (ui.tool === "ctrl") {
+      if (!inMap(cell.x, cell.z)) return;
+      openPop(cell.x, cell.z, p.px, p.py);
+      return;
+    }
+    if (ui.tool === "fill") {
+      if (!g) return toast("Add a group first.");
+      var before = snapshot();
+      var n = floodFill(cell.x, cell.z, g.id);
+      if (n > 0) {
+        undoStack.push(before); redoStack.length = 0;
+        afterChange();
+        toast("Filled " + n + " blocks for " + g.name + ".");
+      } else if (inMap(cell.x, cell.z) && terrain[idx(cell.x, cell.z)] !== 1) {
+        toast("Fill starts on a floor block.");
+      }
+      return;
+    }
+    if (ui.tool === "rect" || (ui.tool === "erase" && e.shiftKey)) {
+      rectStart = cell; rectEnd = cell;
+      drag = { mode: "rect", erase: ui.tool === "erase" };
+      draw();
+      return;
+    }
+    if (ui.tool === "brush" || ui.tool === "erase") {
+      if (ui.tool === "brush" && !g) return toast("Add a group first.");
+      var val = ui.tool === "erase" ? 0 : g.id;
+      drag = { mode: "paint", val: val, last: cell, before: snapshot(), changed: false };
+      drag.changed = brushAt(cell.x, cell.z, val);
+      draw();
+    }
+  });
+
+  cv.addEventListener("pointermove", function (e) {
+    var p = pointerPos(e);
+    var cell = toCell(p.px, p.py);
+    hover = cell;
+    updateReadout(cell);
+    if (drag && drag.mode === "pan") {
+      view.ox = drag.ox + (p.px - drag.sx);
+      view.oy = drag.oy + (p.py - drag.sy);
+    } else if (drag && drag.mode === "paint") {
+      drag.changed = lineBrush(drag.last, cell, drag.val) || drag.changed;
+      drag.last = cell;
+    } else if (drag && drag.mode === "rect") {
+      rectEnd = cell;
+    }
+    draw();
+  });
+
+  function endDrag() {
+    if (!drag) return;
+    if (drag.mode === "paint" && drag.changed) {
+      undoStack.push(drag.before); redoStack.length = 0;
+      afterChange();
+    } else if (drag.mode === "rect" && rectStart && rectEnd) {
+      var g = selGroup();
+      var val = drag.erase ? 0 : (g ? g.id : 0);
+      if (!drag.erase && !g) { toast("Add a group first."); }
+      else {
+        var before = snapshot();
+        if (rectFill(rectStart, rectEnd, val)) { undoStack.push(before); redoStack.length = 0; afterChange(); }
+      }
+      rectStart = rectEnd = null;
+      draw();
+    }
+    drag = null;
+  }
+  cv.addEventListener("pointerup", endDrag);
+  cv.addEventListener("pointercancel", endDrag);
+  cv.addEventListener("pointerleave", function () { hover = null; updateReadout(null); draw(); });
+  cv.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+
+  cv.addEventListener("wheel", function (e) {
+    e.preventDefault();
+    var p = pointerPos(e);
+    var factor = Math.exp(-e.deltaY * 0.0015);
+    zoomAt(p.px, p.py, factor);
+  }, { passive: false });
+
+  function zoomAt(px, py, factor) {
+    var ns = Math.min(48, Math.max(2, view.scale * factor));
+    var wx = (px - view.ox) / view.scale, wz = (py - view.oy) / view.scale;
+    view.scale = ns;
+    view.ox = px - wx * ns;
+    view.oy = py - wz * ns;
+    draw();
+  }
+
+  function updateReadout(cell) {
+    var el = document.getElementById("readout");
+    if (!cell || !inMap(cell.x, cell.z)) { el.innerHTML = '<span class="k">Point at a block</span>'; return; }
+    var t = terrain[idx(cell.x, cell.z)];
+    var kind = t === 2 ? "Wall" : (t === 1 ? "Floor" : "Outside");
+    var rx = relX(cell.x), rz = relZ(cell.z);
+    var lines = ['<span class="k">Block</span> x ' + rx + ', z ' + rz + ' &middot; ' + kind];
+    if (state.world.set) {
+      lines.push('<span class="k">World</span> ' + (state.world.x + rx) + ', ' + state.world.y + ', ' + (state.world.z + rz));
+    }
+    var g = groupById(state.cover[idx(cell.x, cell.z)]);
+    if (g) lines.push('<span class="k">Covered by</span> ' + escapeHtml(g.name));
+    var c = ctrlAt(cell.x, cell.z);
+    if (c) lines.push('<span class="k">Controller</span> ' + escapeHtml(ctrlName(c)) + ' (' + (c.role === "sensor" ? "oxygen sensor" : "door") + (c.computerId != null ? ", #" + c.computerId : "") + ')');
+    el.innerHTML = lines.join("<br>");
+  }
+
+  function escapeHtml(s) { return String(s).replace(/[&<>"']/g, function (m) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]; }); }
+
+  var pop = document.getElementById("pop");
+  var popCell = null, popEdit = null;
+
+  function openPop(x, z, px, py) {
+    popCell = { x: x, z: z };
+    popEdit = ctrlAt(x, z);
+    var sel = document.getElementById("pGroup");
+    sel.innerHTML = "";
+    state.groups.forEach(function (g) {
+      var o = document.createElement("option");
+      o.value = g.id; o.textContent = g.name;
+      sel.appendChild(o);
+    });
+    var g = popEdit ? groupById(popEdit.group) : selGroup();
+    if (!g) { toast("Add a group first."); return; }
+    sel.value = g.id;
+    var letter = popEdit ? popEdit.letter : nextLetter(g.id);
+    document.getElementById("pLetter").value = letter;
+    document.getElementById("pRole").value = popEdit ? popEdit.role : (letter.toUpperCase() === "C" ? "sensor" : "door");
+    document.getElementById("pId").value = popEdit && popEdit.computerId != null ? popEdit.computerId : "";
+    document.getElementById("pNote").value = popEdit && popEdit.note ? popEdit.note : "";
+    document.getElementById("popTitle").textContent = (popEdit ? "Edit controller" : "New controller") + " at x " + relX(x) + ", z " + relZ(z);
+    document.getElementById("pDelete").style.display = popEdit ? "" : "none";
+    var r = stage.getBoundingClientRect();
+    pop.style.display = "block";
+    var left = Math.min(px + 14, r.width - pop.offsetWidth - 8);
+    var top = Math.min(py + 14, r.height - pop.offsetHeight - 8);
+    pop.style.left = Math.max(8, left) + "px";
+    pop.style.top = Math.max(8, top) + "px";
+    document.getElementById("pLetter").focus();
+    document.getElementById("pLetter").select();
+  }
+  function hidePop() { pop.style.display = "none"; popCell = null; popEdit = null; }
+
+  function nextLetter(gid) {
+    var used = {};
+    state.ctrls.forEach(function (c) { if (c.group === gid) used[c.letter.toUpperCase()] = true; });
+    var order = ["A", "B", "C", "D", "E", "F", "G", "H"];
+    for (var i = 0; i < order.length; i++) if (!used[order[i]]) return order[i];
+    return "X";
+  }
+
+  document.getElementById("pLetter").addEventListener("input", function () {
+    var v = this.value.trim().toUpperCase();
+    if (!popEdit) document.getElementById("pRole").value = v === "C" ? "sensor" : "door";
+  });
+  document.getElementById("pGroup").addEventListener("change", function () {
+    if (!popEdit) {
+      var l = nextLetter(Number(this.value));
+      document.getElementById("pLetter").value = l;
+      document.getElementById("pRole").value = l === "C" ? "sensor" : "door";
+    }
+  });
+  document.getElementById("pCancel").addEventListener("click", hidePop);
+  document.getElementById("pDelete").addEventListener("click", function () {
+    if (!popEdit) return;
+    pushUndo();
+    state.ctrls = state.ctrls.filter(function (c) { return c !== popEdit; });
+    hidePop();
+    afterChange();
+  });
+  document.getElementById("pSave").addEventListener("click", savePop);
+  pop.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); savePop(); }
+    if (e.key === "Escape") { e.preventDefault(); hidePop(); }
+  });
+
+  function savePop() {
+    if (!popCell) return;
+    var gid = Number(document.getElementById("pGroup").value);
+    var letter = document.getElementById("pLetter").value.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (!letter) { toast("Give it a letter, for example A."); return; }
+    var dup = state.ctrls.filter(function (c) { return c.group === gid && c.letter === letter && c !== popEdit; })[0];
+    if (dup) { toast(groupById(gid).name + "-" + letter + " is already at x " + relX(dup.x) + ", z " + relZ(dup.z) + "."); return; }
+    var idText = document.getElementById("pId").value.trim();
+    pushUndo();
+    var rec = popEdit || { x: popCell.x, z: popCell.z };
+    rec.group = gid;
+    rec.letter = letter;
+    rec.role = document.getElementById("pRole").value === "sensor" ? "sensor" : "door";
+    rec.computerId = idText === "" ? null : Math.max(0, Math.floor(Number(idText)));
+    rec.note = document.getElementById("pNote").value.trim();
+    if (!popEdit) state.ctrls.push(rec);
+    ui.sel = gid;
+    hidePop();
+    afterChange();
+  }
+
+  function groupStats() {
+    var counts = {};
+    for (var i = 0; i < state.cover.length; i++) if (state.cover[i]) counts[state.cover[i]] = (counts[state.cover[i]] || 0) + 1;
+    return counts;
+  }
+
+  function renderSidebar() {
+    var counts = groupStats();
+    var box = document.getElementById("groups");
+    box.innerHTML = "";
+    state.groups.forEach(function (g) {
+      var row = document.createElement("div");
+      row.className = "group" + (g.id === ui.sel ? " sel" : "");
+      var sw = document.createElement("label");
+      sw.className = "swatch";
+      sw.style.background = g.color;
+      sw.title = "Change color";
+      var inp = document.createElement("input");
+      inp.type = "color"; inp.value = g.color;
+      inp.addEventListener("click", function (e) { e.stopPropagation(); });
+      inp.addEventListener("change", function () { pushUndo(); g.color = inp.value; afterChange(); });
+      sw.appendChild(inp);
+      var nm = document.createElement("div");
+      nm.className = "gname";
+      var mine = state.ctrls.filter(function (c) { return c.group === g.id; });
+      nm.innerHTML = '<div class="n">' + escapeHtml(g.name) + '</div><div class="m">' + (counts[g.id] || 0) + " blocks &middot; " + mine.length + " controller" + (mine.length === 1 ? "" : "s") + "</div>";
+      var badges = document.createElement("div");
+      badges.className = "badges";
+      ["A", "B", "C"].forEach(function (L) {
+        var b = document.createElement("span");
+        var has = mine.some(function (c) { return c.letter === L; });
+        b.className = "badge" + (has ? " on" : "");
+        b.textContent = L;
+        b.title = g.name + "-" + L + (has ? " placed" : " not placed yet");
+        badges.appendChild(b);
+      });
+      row.appendChild(sw); row.appendChild(nm); row.appendChild(badges);
+      row.addEventListener("click", function () { ui.sel = g.id; renderSidebar(); });
+      box.appendChild(row);
+    });
+    var g = selGroup();
+    document.getElementById("ctrlTitle").textContent = g ? "Controllers of " + g.name : "Controllers";
+    var list = document.getElementById("ctrls");
+    list.innerHTML = "";
+    var warn = document.getElementById("groupWarn");
+    warn.innerHTML = "";
+    if (!g) return;
+    var mine = state.ctrls.filter(function (c) { return c.group === g.id; }).sort(function (a, b) { return a.letter < b.letter ? -1 : 1; });
+    var problems = [];
+    if (!mine.some(function (c) { return c.role === "sensor"; })) problems.push("No oxygen sensor yet (usually " + g.name + "-C).");
+    if (!mine.some(function (c) { return c.role === "door"; })) problems.push("No doors yet (usually " + g.name + "-A and -B).");
+    if (!counts[g.id]) problems.push("No coverage painted yet.");
+    mine.forEach(function (c) {
+      if (c.role === "sensor" && c.letter !== "C") problems.push(ctrlName(c) + " is a sensor but ZelNet treats only -C as the sensor by name; set its job on the computer to Oxygen sensor.");
+    });
+    problems.forEach(function (p) { var d = document.createElement("div"); d.className = "warn"; d.textContent = p; warn.appendChild(d); });
+    mine.forEach(function (c) {
+      var d = document.createElement("div");
+      d.className = "ctrl";
+      d.innerHTML = "<div><b>" + escapeHtml(ctrlName(c)) + "</b> " + (c.role === "sensor" ? "oxygen sensor" : "door") + (c.computerId != null ? " &middot; #" + c.computerId : "") + (c.note ? '<div class="where">' + escapeHtml(c.note) + "</div>" : "") + '</div><div class="where">x ' + relX(c.x) + ", z " + relZ(c.z) + "</div>";
+      d.addEventListener("click", function () {
+        var s = view.scale, r = stage.getBoundingClientRect();
+        view.ox = r.width / 2 - (c.x + 0.5) * s;
+        view.oy = r.height / 2 - (c.z + 0.5) * s;
+        draw();
+        openPop(c.x, c.z, r.width / 2, r.height / 2);
+      });
+      list.appendChild(d);
+    });
+  }
+
+  function setTool(t) {
+    ui.tool = t;
+    document.querySelectorAll("#tools .btn").forEach(function (b) { b.setAttribute("aria-pressed", b.getAttribute("data-tool") === t ? "true" : "false"); });
+    var hints = {
+      brush: "Drag over floor blocks to mark them as covered by the selected group.",
+      fill: "Click a floor block to fill that room or that stretch of corridor. It stops at walls, at doorways and at paint that is already there.",
+      rect: "Drag a rectangle to paint every floor block inside it.",
+      erase: "Drag to remove coverage. Hold Shift and drag for a rectangle.",
+      ctrl: "Click the block a computer sits on to place or edit it.",
+      pan: "Drag to move the map. You can also drag with the right mouse button or hold Space with any tool."
+    };
+    document.getElementById("toolHint").textContent = hints[t] || "";
+    cv.style.cursor = t === "pan" ? "grab" : "crosshair";
+  }
+  document.querySelectorAll("#tools .btn").forEach(function (b) { b.addEventListener("click", function () { setTool(b.getAttribute("data-tool")); }); });
+
+  function setSize(n) {
+    ui.size = n;
+    document.querySelectorAll("#brushSize button").forEach(function (b) { b.setAttribute("aria-pressed", Number(b.getAttribute("data-size")) === n ? "true" : "false"); });
+  }
+  document.querySelectorAll("#brushSize button").forEach(function (b) { b.addEventListener("click", function () { setSize(Number(b.getAttribute("data-size"))); }); });
+
+  document.getElementById("paintWalls").addEventListener("change", function () { ui.paintWalls = this.checked; });
+  document.getElementById("showUncovered").addEventListener("change", function () { ui.showUncovered = this.checked; draw(); });
+  document.getElementById("showLabels").addEventListener("change", function () { ui.showLabels = this.checked; draw(); });
+
+  document.getElementById("undo").addEventListener("click", undo);
+  document.getElementById("redo").addEventListener("click", redo);
+  document.getElementById("zoomIn").addEventListener("click", function () { var r = stage.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, 1.25); });
+  document.getElementById("zoomOut").addEventListener("click", function () { var r = stage.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, 0.8); });
+  document.getElementById("zoomFit").addEventListener("click", fit);
+
+  document.getElementById("addGroup").addEventListener("click", function () {
+    askText("Add group", "Name of the new airlock group, as on its computers (for example Athena9).", "Athena" + (state.groups.length + 1), function (name) {
+      if (state.groups.some(function (g) { return g.name.toLowerCase() === name.toLowerCase(); })) return toast("There is already a group called " + name + ".");
+      pushUndo();
+      var g = { id: state.nextId++, name: name, color: PALETTE[state.groups.length % PALETTE.length] };
+      state.groups.push(g);
+      ui.sel = g.id;
+      afterChange();
+    });
+  });
+  document.getElementById("renameGroup").addEventListener("click", function () {
+    var g = selGroup();
+    if (!g) return;
+    askText("Rename group", "New name for " + g.name + ". Its controllers keep their letters.", g.name, function (name) {
+      if (state.groups.some(function (o) { return o !== g && o.name.toLowerCase() === name.toLowerCase(); })) return toast("There is already a group called " + name + ".");
+      pushUndo();
+      g.name = name;
+      afterChange();
+    });
+  });
+  document.getElementById("deleteGroup").addEventListener("click", function () {
+    var g = selGroup();
+    if (!g) return;
+    confirmBox("Delete " + g.name + "?", "Its painted coverage and its controllers are removed too. You can undo this.", "Delete", function () {
+      pushUndo();
+      for (var i = 0; i < state.cover.length; i++) if (state.cover[i] === g.id) state.cover[i] = 0;
+      state.ctrls = state.ctrls.filter(function (c) { return c.group !== g.id; });
+      state.groups = state.groups.filter(function (o) { return o !== g; });
+      ui.sel = state.groups.length ? state.groups[0].id : 0;
+      afterChange();
+    });
+  });
+
+  var modal = document.getElementById("modal"), back = document.getElementById("modalBack");
+  function openModal(title, bodyEl, actions) {
+    document.getElementById("modalTitle").textContent = title;
+    var body = document.getElementById("modalBody");
+    body.innerHTML = "";
+    if (bodyEl) body.appendChild(bodyEl);
+    var acts = document.getElementById("modalActs");
+    acts.innerHTML = "";
+    actions.forEach(function (a) {
+      var b = document.createElement("button");
+      b.className = "btn" + (a.primary ? " primary" : "") + (a.danger ? " danger" : "");
+      b.textContent = a.label;
+      b.addEventListener("click", function () { if (a.run() !== false) closeModal(); });
+      acts.appendChild(b);
+    });
+    modal.style.display = "block"; back.style.display = "block";
+  }
+  function closeModal() { modal.style.display = "none"; back.style.display = "none"; }
+  back.addEventListener("click", closeModal);
+
+  function askText(title, text, value, done) {
+    var wrap = document.createElement("div");
+    var p = document.createElement("p"); p.className = "hint"; p.textContent = text;
+    var inp = document.createElement("input"); inp.type = "text"; inp.value = value; inp.maxLength = 32;
+    wrap.appendChild(p); wrap.appendChild(inp);
+    var ok = function () {
+      var v = inp.value.trim();
+      if (!v) { toast("Type a name."); return false; }
+      done(v);
+    };
+    inp.addEventListener("keydown", function (e) { if (e.key === "Enter") { if (ok() !== false) closeModal(); } });
+    openModal(title, wrap, [{ label: "Cancel", run: function () {} }, { label: "OK", primary: true, run: ok }]);
+    setTimeout(function () { inp.focus(); inp.select(); }, 0);
+  }
+  function confirmBox(title, text, yes, done) {
+    var p = document.createElement("p"); p.textContent = text;
+    openModal(title, p, [{ label: "Cancel", run: function () {} }, { label: yes, danger: true, run: done }]);
+  }
+
+  function exportData() {
+    var groups = state.groups.map(function (g) {
+      var cells = [];
+      for (var z = 0; z < H; z++) for (var x = 0; x < W; x++) if (state.cover[idx(x, z)] === g.id) cells.push([relX(x), relZ(z)]);
+      var ctrls = state.ctrls.filter(function (c) { return c.group === g.id; }).sort(function (a, b) { return a.letter < b.letter ? -1 : 1; }).map(function (c) {
+        var o = { name: g.name + "-" + c.letter, letter: c.letter, role: c.role, x: relX(c.x), z: relZ(c.z) };
+        if (c.computerId != null) o.computerId = c.computerId;
+        if (c.note) o.note = c.note;
+        if (state.world.set) o.world = { x: state.world.x + relX(c.x), y: state.world.y, z: state.world.z + relZ(c.z) };
+        return o;
+      });
+      return { name: g.name, color: g.color, blocks: cells.length, cells: cells, controllers: ctrls };
+    });
+    return {
+      format: "zelnet-station-map",
+      version: 1,
+      station: "Station Athena",
+      coordinates: "x east, z south, relative to the Ender Chest stack in the middle of the hub",
+      size: { width: W, height: H, minX: OX, minZ: OZ },
+      world: state.world.set ? { x: state.world.x, y: state.world.y, z: state.world.z } : null,
+      legend: { "#": "wall", ".": "floor", " ": "outside" },
+      map: MAP,
+      groups: groups
+    };
+  }
+
+  function download(name, blob) {
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+  }
+
+  document.getElementById("exportJson").addEventListener("click", function () {
+    var text = JSON.stringify(exportData(), null, 1);
+    var wrap = document.createElement("div");
+    var p = document.createElement("p"); p.className = "hint";
+    p.textContent = "This holds the whole map, every group's coverage and every controller. Download it or copy it, then give it to Claude to build the monitor graphic.";
+    var ta = document.createElement("textarea"); ta.value = text; ta.readOnly = true;
+    wrap.appendChild(p); wrap.appendChild(ta);
+    openModal("Export for ZelNet", wrap, [
+      { label: "Close", run: function () {} },
+      { label: "Copy", run: function () {
+        ta.select();
+        var done = function () { toast("Copied to the clipboard."); };
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, function () { try { document.execCommand("copy"); done(); } catch (e) { toast("Select the text and copy it."); } });
+        else { try { document.execCommand("copy"); done(); } catch (e) { toast("Select the text and copy it."); } }
+        return false;
+      } },
+      { label: "Download", primary: true, run: function () { download("athena-airlocks.json", new Blob([text], { type: "application/json" })); return false; } }
+    ]);
+  });
+
+  function importData(d) {
+    if (!d || d.format !== "zelnet-station-map" || !Array.isArray(d.groups)) throw new Error("This is not an Athena map export.");
+    var groups = [], cover = new Int16Array(W * H), ctrls = [], nextId = 1;
+    d.groups.forEach(function (g) {
+      var id = nextId++;
+      groups.push({ id: id, name: String(g.name || ("Group " + id)).slice(0, 32), color: /^#[0-9a-fA-F]{6}$/.test(g.color) ? g.color : PALETTE[(id - 1) % PALETTE.length] });
+      (g.cells || []).forEach(function (c) {
+        var x = c[0] - OX, z = c[1] - OZ;
+        if (inMap(x, z) && terrain[idx(x, z)] !== 0) cover[idx(x, z)] = id;
+      });
+      (g.controllers || []).forEach(function (c) {
+        var x = c.x - OX, z = c.z - OZ;
+        if (!inMap(x, z)) return;
+        ctrls.push({ x: x, z: z, group: id, letter: String(c.letter || "A").toUpperCase().slice(0, 3), role: c.role === "sensor" ? "sensor" : "door", computerId: c.computerId != null ? Number(c.computerId) : null, note: c.note ? String(c.note).slice(0, 60) : "" });
+      });
+    });
+    pushUndo();
+    state.groups = groups; state.cover = cover; state.ctrls = ctrls; state.nextId = nextId;
+    if (d.world && typeof d.world.x === "number") state.world = { x: d.world.x, y: d.world.y || 64, z: d.world.z, set: true };
+    ui.sel = groups.length ? groups[0].id : 0;
+    afterChange();
+  }
+
+  document.getElementById("importJson").addEventListener("click", function () {
+    var wrap = document.createElement("div");
+    var p = document.createElement("p"); p.className = "hint";
+    p.textContent = "Paste an export below, or pick a saved .json file. This replaces the current map; you can undo it.";
+    var file = document.createElement("input"); file.type = "file"; file.accept = ".json,application/json";
+    var ta = document.createElement("textarea"); ta.placeholder = "Paste the export here";
+    file.addEventListener("change", function () {
+      var f = file.files && file.files[0];
+      if (!f) return;
+      f.text().then(function (t) { ta.value = t; });
+    });
+    wrap.appendChild(p); wrap.appendChild(file); wrap.appendChild(document.createElement("br")); wrap.appendChild(document.createElement("br")); wrap.appendChild(ta);
+    openModal("Import", wrap, [
+      { label: "Cancel", run: function () {} },
+      { label: "Import", primary: true, run: function () {
+        try { importData(JSON.parse(ta.value)); toast("Imported."); }
+        catch (e) { toast(e.message || "That is not valid JSON."); return false; }
+      } }
+    ]);
+  });
+
+  document.getElementById("exportPng").addEventListener("click", function () {
+    var s = 8, legendH = 26 + Math.ceil(state.groups.length / 4) * 22;
+    var c = document.createElement("canvas");
+    c.width = W * s + 40; c.height = H * s + 70 + legendH;
+    var saved = { scale: view.scale, ox: view.ox, oy: view.oy, cv: cv, ctx: ctx, dpr: dpr, hover: hover };
+    var g2 = c.getContext("2d");
+    ctx = g2; dpr = 1; view.scale = s; view.ox = 20; view.oy = 60; hover = null;
+    var oldW = cv.width, oldH = cv.height;
+    var fake = { width: c.width, height: H * s + 70 };
+    var realCv = cv;
+    cv = fake;
+    draw();
+    cv = realCv;
+    g2.fillStyle = css("--panel");
+    g2.fillRect(0, H * s + 70, c.width, legendH);
+    g2.font = "600 13px system-ui, sans-serif";
+    g2.textBaseline = "middle";
+    state.groups.forEach(function (g, i) {
+      var col = i % 4, row = Math.floor(i / 4);
+      var lx = 20 + col * ((c.width - 40) / 4), ly = H * s + 70 + 16 + row * 22;
+      g2.fillStyle = g.color; g2.fillRect(lx, ly - 7, 14, 14);
+      g2.fillStyle = css("--ink"); g2.fillText(g.name, lx + 20, ly);
+    });
+    g2.fillStyle = css("--ink");
+    g2.font = "700 14px system-ui, sans-serif";
+    g2.textBaseline = "top";
+    g2.fillText("Station Athena airlocks", 20, 10);
+    ctx = saved.ctx; dpr = saved.dpr; view.scale = saved.scale; view.ox = saved.ox; view.oy = saved.oy; hover = saved.hover;
+    draw();
+    c.toBlob(function (b) { if (b) download("athena-airlocks.png", b); });
+  });
+
+  document.getElementById("settingsBtn").addEventListener("click", function () {
+    var wrap = document.createElement("div");
+    wrap.innerHTML =
+      '<p class="hint">Optional. Type the world coordinates of the Ender Chest stack in the middle of the hub (the tin chest). The map then shows world coordinates too, and the export includes them for every controller.</p>' +
+      '<div class="f" style="display:grid;grid-template-columns:90px 1fr;gap:8px;align-items:center">' +
+      '<label for="wx">Chest X</label><input type="number" id="wx">' +
+      '<label for="wy">Floor Y</label><input type="number" id="wy">' +
+      '<label for="wz">Chest Z</label><input type="number" id="wz">' +
+      '<label for="theme">Theme</label><select id="theme"><option value="">Match my system</option><option value="light">Light</option><option value="dark">Dark</option></select>' +
+      '</div>';
+    openModal("Settings", wrap, [
+      { label: "Clear all coverage", danger: true, run: function () {
+        confirmBox("Clear everything?", "All painted coverage and all controllers are removed. Groups stay. You can undo this.", "Clear", function () {
+          pushUndo();
+          state.cover = new Int16Array(W * H);
+          state.ctrls = [];
+          afterChange();
+        });
+        return false;
+      } },
+      { label: "Cancel", run: function () {} },
+      { label: "Save", primary: true, run: function () {
+        var x = document.getElementById("wx").value, y = document.getElementById("wy").value, z = document.getElementById("wz").value;
+        pushUndo();
+        if (x === "" || z === "") state.world = { x: 0, y: 64, z: 0, set: false };
+        else state.world = { x: Math.floor(Number(x)), y: y === "" ? 64 : Math.floor(Number(y)), z: Math.floor(Number(z)), set: true };
+        var th = document.getElementById("theme").value;
+        if (th) document.documentElement.setAttribute("data-theme", th); else document.documentElement.removeAttribute("data-theme");
+        try { localStorage.setItem(STORE + "-theme", th); } catch (e) {}
+        afterChange();
+      } }
+    ]);
+    if (state.world.set) {
+      document.getElementById("wx").value = state.world.x;
+      document.getElementById("wy").value = state.world.y;
+      document.getElementById("wz").value = state.world.z;
+    }
+    document.getElementById("theme").value = document.documentElement.getAttribute("data-theme") || "";
+  });
+
+  var toastTimer = null;
+  function toast(text) {
+    var t = document.getElementById("toast");
+    t.textContent = text;
+    t.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.classList.remove("show"); }, 2600);
+  }
+
+  document.addEventListener("keydown", function (e) {
+    var tag = (e.target && e.target.tagName) || "";
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); if (e.shiftKey) redo(); else undo(); return; }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "y") { e.preventDefault(); redo(); return; }
+    if (e.key === " ") { spaceDown = true; cv.style.cursor = "grab"; e.preventDefault(); return; }
+    var map = { b: "brush", f: "fill", r: "rect", e: "erase", c: "ctrl", h: "pan" };
+    var k = e.key.toLowerCase();
+    if (map[k]) setTool(map[k]);
+    if (k === "[") setSize(ui.size === 5 ? 3 : 1);
+    if (k === "]") setSize(ui.size === 1 ? 3 : 5);
+    if (k === "escape") { hidePop(); closeModal(); }
+  });
+  document.addEventListener("keyup", function (e) {
+    if (e.key === " ") { spaceDown = false; setTool(ui.tool); }
+  });
+
+  try {
+    var th = localStorage.getItem(STORE + "-theme");
+    if (th) document.documentElement.setAttribute("data-theme", th);
+  } catch (e) {}
+  if (window.matchMedia) {
+    var mq = window.matchMedia("(prefers-color-scheme: dark)");
+    if (mq.addEventListener) mq.addEventListener("change", draw);
+  }
+
+  load();
+  if (!ui.sel && state.groups.length) ui.sel = state.groups[0].id;
+  setTool("brush");
+  setSize(1);
+  renderSidebar();
+  syncUndo();
+  window.addEventListener("resize", resize);
+  resize();
+  fit();
+})();
+</script>
+</body>
+</html>
