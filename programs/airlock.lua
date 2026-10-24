@@ -1,7 +1,8 @@
 local STATE_FILE = "/airlock.dat"
 local SILENT_AFTER = 960
 local SEARCH_EVERY = 60
-local PEER_DELAY = 2
+local PEER_DELAY = 5
+local OPEN_GRACE = 10
 
 local SIDES = { "top", "bottom", "left", "right", "front", "back" }
 
@@ -32,6 +33,7 @@ local state = {
 
 local monitor = nil
 local lastHeard = nil
+local unsealedAt = nil
 
 local function trim(s)
     s = tostring(s or "")
@@ -133,6 +135,7 @@ local function applyCommand(cmd, locked)
     elseif cmd == "seal" then
         applyPhysical(true)
     elseif cmd == "unseal" then
+        if state.sealed then unsealedAt = os.clock() end
         applyPhysical(false)
     end
 end
@@ -476,7 +479,8 @@ local function runtimeLoop()
                 tellPeers()
                 render()
                 if (not o2) and state.failsafe and not state.sealed and not isSensor() then
-                    failsafeTimer = os.startTimer(state.failsafeDelay)
+                    local justOpened = unsealedAt ~= nil and os.clock() - unsealedAt < OPEN_GRACE
+                    failsafeTimer = os.startTimer(state.failsafeDelay + (justOpened and OPEN_GRACE or 0))
                 elseif o2 then
                     failsafeTimer = nil
                 end
@@ -516,7 +520,8 @@ local function runtimeLoop()
                     render()
                 elseif msg.type == "alk_peer" then
                     if not isSensor() and nameBase(state.name) ~= nil and msg.group == nameBase(state.name) then
-                        if msg.oxygenated == false and state.failsafe and not state.sealed then
+                        local justOpened = unsealedAt ~= nil and os.clock() - unsealedAt < OPEN_GRACE
+                        if msg.oxygenated == false and state.failsafe and not state.sealed and not justOpened then
                             peerTimer = peerTimer or os.startTimer(PEER_DELAY)
                         elseif msg.oxygenated == true then
                             peerTimer = nil

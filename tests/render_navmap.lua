@@ -24,13 +24,13 @@ local function nodes(lost, extra)
     return list
 end
 
-local function shot(name, list, contain, frame)
-    local w, h = termlib.monitorSize(6, 5, 0.5)
+local function shot(name, list, contain, frame, bw, areas)
+    local w, h = termlib.monitorSize(bw or 6, 5, 0.5)
     local t = termlib.Terminal.new(w, h, true)
     local methods = termlib.methods(function() return t end)
     methods.setTextScale = function() end
     local surf = ui.surface(methods, "monitor_9")
-    navmap.draw(surf, list, contain, { frame = frame, release = "r38", clock = "Day 41  14:05" })
+    navmap.draw(surf, list, contain, { frame = frame, release = "r38", clock = "Day 41  14:05", areas = areas })
     surf:flush(true)
     local f = assert(io.open(OUT .. "/" .. name .. ".scr", "w"))
     f:write("# " .. t.w .. " " .. t.h .. "\n")
@@ -50,3 +50,6 @@ shot("navmap_breach_a", breach, { { station = "Athena", cause = "Athena6-C", age
 shot("navmap_breach_b", breach, { { station = "Athena", cause = "Athena6-C", age = 43 } }, 1)
 local all = nodes({}, function(r) if r.role == "door" then r.sealed = true end end)
 shot("navmap_contain", all, { { station = "Athena", cause = "Athena2-B", age = 8 } }, 0)
+shot("navmap9_breach", breach, {}, 0, 9)
+shot("navmap9_lockdown", nodes({}, function(r) if r.role == "door" then r.sealed = true end end), { { station = "Athena", cause = "lockdown", hold = true, manual = true, age = 75 } }, 1, 9)
+shot("navmap9_settling", nodes({ ["Athena2-B"] = true }), {}, 0, 9, { zones = { Athena2 = "holding" }, commons = { north = "pending" } })

@@ -7,6 +7,8 @@ M.SCALE = 0.5
 M.STATION = "Athena"
 M.SIZE = 49
 M.SIDE_MIN = 18
+M.SIDE_MAX = 36
+M.GAP = 3
 
 M.ZONES = {
     { group = "Athena", label = "1", rects = { { -1, 9, 1, 29 } }, callout = { 6, 19 } },
@@ -181,7 +183,9 @@ local function doorState(rec)
     return "open"
 end
 
-function M.status(list, contain)
+local ENGINE = { lost = "breach", pending = "settling", holding = "ok" }
+
+function M.status(list, contain, areas)
     local by = {}
     for _, r in ipairs(list or {}) do
         if type(r.name) == "string" then by[r.name:lower()] = r end
@@ -199,6 +203,8 @@ function M.status(list, contain)
         else
             s = "ok"
         end
+        local eng = areas and areas.zones and areas.zones[zone.group]
+        if eng and s ~= "nodata" and s ~= "offline" then s = ENGINE[eng] or s end
         local shut = true
         for _, L in ipairs({ "A", "B" }) do
             local d = by[(zone.group .. "-" .. L):lower()]
@@ -208,7 +214,7 @@ function M.status(list, contain)
         if s == "breach" then
             st.breach = st.breach + 1
             st.alerts[#st.alerts + 1] = { text = "Zone " .. zone.label .. " no oxygen", kind = "breach" }
-        elseif s ~= "ok" then
+        elseif s ~= "ok" and s ~= "settling" then
             st.unknown = st.unknown + 1
         end
     end
@@ -223,11 +229,13 @@ function M.status(list, contain)
             end
         end
         local s = low and "breach" or (not any and "nodata") or (not live and "offline") or "ok"
+        local eng = areas and areas.commons and areas.commons[c.id]
+        if eng and s ~= "nodata" and s ~= "offline" then s = ENGINE[eng] or s end
         st.commons[i] = { state = s }
         if s == "breach" then
             st.breach = st.breach + 1
             st.alerts[#st.alerts + 1] = { text = c.name .. " no oxygen", kind = "breach" }
-        elseif s ~= "ok" then
+        elseif s ~= "ok" and s ~= "settling" then
             st.unknown = st.unknown + 1
         end
     end
@@ -247,16 +255,23 @@ function M.status(list, contain)
             end
         end
     end
+    local settling = false
+    for _, z in ipairs(st.zones) do if z.state == "settling" then settling = true end end
+    for _, c in ipairs(st.commons) do if c.state == "settling" then settling = true end end
     st.contain = nil
     for _, c in ipairs(contain or {}) do
         if c.station == M.STATION then st.contain = c end
     end
     if st.breach > 0 then
         st.overall = "breach"
+    elseif st.contain and st.contain.manual then
+        st.overall = "lockdown"
     elseif st.contain and st.contain.hold then
         st.overall = "held"
     elseif st.contain then
         st.overall = "contain"
+    elseif settling then
+        st.overall = "settling"
     elseif st.unknown > 0 then
         st.overall = "partial"
     else
@@ -268,7 +283,7 @@ end
 function M.colors(frame)
     return {
         outside = colors.black, wall = colors.gray, zone = colors.lime, common = colors.green,
-        breach = frame == 1 and colors.orange or colors.red, nodata = colors.purple, offline = colors.lightGray,
+        breach = frame == 1 and colors.orange or colors.red, nodata = colors.purple, offline = colors.lightGray, settling = colors.cyan,
         open = colors.white, sealed = colors.yellow, locked = colors.magenta, missing = colors.black,
         side = colors.black, head = colors.blue,
     }
@@ -278,20 +293,35 @@ local function areaColor(pal, kind, s)
     if s == "breach" then return pal.breach end
     if s == "nodata" then return pal.nodata end
     if s == "offline" then return pal.offline end
+    if s == "settling" then return pal.settling end
     return kind == "zone" and pal.zone or pal.common
 end
 
-function M.sideWidth(w, h)
-    local mapW = math.floor(h * 1.5 + 0.5)
-    return math.max(M.SIDE_MIN, w - mapW)
+function M.frame(w, h)
+    local mapW = math.min(math.floor(h * 1.5 + 0.5), w - M.SIDE_MIN)
+    local spare = w - mapW
+    local gap = spare >= M.SIDE_MIN + M.GAP and M.GAP or 0
+    local sideW = math.min(M.SIDE_MAX, spare - gap)
+    return { sideX = 1, sideW = sideW, mapX = w - mapW + 1, mapW = mapW }
+end
+
+local function shifted(surf, dx)
+    return {
+        h = surf.h,
+        rect = function(_, x, ...) return surf:rect(x + dx, ...) end,
+        text = function(_, x, ...) return surf:text(x + dx, ...) end,
+        field = function(_, x, ...) return surf:field(x + dx, ...) end,
+    }
 end
 
 local OVERALL = {
     sealed = { "ALL SEALED", "every area holds O2" },
-    breach = { "BREACH", "doors closed" },
+    breach = { "BREACH", "zone sealed off" },
     contain = { "CONTAINMENT", "doors settling" },
     held = { "HELD SHUT", "release at console" },
+    lockdown = { "LOCKDOWN", "release at console" },
     partial = { "SEALED", "some areas no data" },
+    settling = { "SETTLING", "checking an area" },
 }
 
 local function fmtAge(s)
@@ -305,6 +335,7 @@ local function stateWord(s)
     if s == "ok" then return "SEALED" end
     if s == "breach" then return "BREACH" end
     if s == "offline" then return "OFFLINE" end
+    if s == "settling" then return "SETTLING" end
     return "NO DATA"
 end
 
@@ -316,9 +347,10 @@ function M.drawSide(surf, sideW, st, info, pal, frame)
     surf:field(1, 2, sideW, "NAVMAP " .. tostring(info.release or ""), colors.lightBlue, pal.head, "center")
     local o = OVERALL[st.overall] or OVERALL.partial
     local bc = colors.green
-    if st.overall == "breach" or st.overall == "held" then bc = pal.breach
+    if st.overall == "breach" or st.overall == "held" or st.overall == "lockdown" then bc = pal.breach
     elseif st.overall == "contain" then bc = colors.orange
-    elseif st.overall == "partial" then bc = colors.purple end
+    elseif st.overall == "partial" then bc = colors.purple
+    elseif st.overall == "settling" then bc = colors.cyan end
     surf:rect(1, 4, sideW, 5, bc)
     local fg = (bc == colors.orange or bc == colors.yellow) and colors.black or colors.white
     if st.overall == "breach" then
@@ -346,6 +378,7 @@ function M.drawSide(surf, sideW, st, info, pal, frame)
         if s == "ok" then return colors.lime end
         if s == "breach" then return pal.breach end
         if s == "offline" then return colors.lightGray end
+        if s == "settling" then return colors.cyan end
         return colors.purple
     end
     title("ZONES")
@@ -366,7 +399,7 @@ function M.drawSide(surf, sideW, st, info, pal, frame)
     line("Locked", tostring(st.counts.locked), colors.magenta)
     line("Offline", tostring(st.counts.offline + st.counts.missing), (st.counts.offline + st.counts.missing) > 0 and colors.orange or colors.lightGray)
     y = y + 1
-    title("CONTAINMENT")
+    title("LOCKDOWN")
     if st.contain then
         line("Since", fmtAge(st.contain.age), colors.orange)
         line("Cause", util.fitText(tostring(st.contain.cause or "?"), sideW - 9), colors.orange)
@@ -375,7 +408,7 @@ function M.drawSide(surf, sideW, st, info, pal, frame)
         line("Status", "clear", colors.lime)
     end
     y = y + 1
-    local legendTop = h - 6
+    local legendTop = h - 7
     title("ALERTS")
     local shown = 0
     for _, a in ipairs(st.alerts) do
@@ -392,7 +425,7 @@ function M.drawSide(surf, sideW, st, info, pal, frame)
     end
     if legendTop > y then
         local items = {
-            { pal.common, "area sealed" }, { pal.breach, "no oxygen" }, { colors.purple, "no data" },
+            { pal.common, "area sealed" }, { pal.breach, "no oxygen" }, { colors.cyan, "settling" }, { colors.purple, "no data" },
             { colors.white, "door open" }, { colors.yellow, "door sealed" }, { colors.magenta, "door locked" },
         }
         for i, it in ipairs(items) do
@@ -468,16 +501,17 @@ end
 
 function M.draw(surf, list, contain, info)
     info = info or {}
+    local areas = info.areas
     local frame = info.frame or 0
     surf:begin()
     if not surf.isColor then
         surf:field(1, 1, surf.w, "Navmap needs an advanced monitor.", colors.white, colors.black)
         return nil
     end
-    local st = M.status(list, contain)
+    local st = M.status(list, contain, areas)
     local pal = M.colors(frame)
-    local sideW = M.sideWidth(surf.w, surf.h)
-    local mapW = surf.w - sideW
+    local fr = M.frame(surf.w, surf.h)
+    local mapW = fr.mapW
     if mapW < 20 then
         surf:field(1, 1, surf.w, "Navmap needs a 6x5 monitor.", colors.white, colors.black)
         return st
@@ -485,8 +519,8 @@ function M.draw(surf, list, contain, info)
     if not surf.navLayout or surf.navLayout.w ~= mapW or surf.navLayout.h ~= surf.h then
         surf.navLayout = { w = mapW, h = surf.h, rows = M.layout(mapW, surf.h) }
     end
-    M.drawSide(surf, sideW, st, info, pal, frame)
-    M.drawMap(surf, sideW + 1, mapW, st, surf.navLayout.rows, pal, frame)
+    M.drawSide(shifted(surf, fr.sideX - 1), fr.sideW, st, info, pal, frame)
+    M.drawMap(surf, fr.mapX, mapW, st, surf.navLayout.rows, pal, frame)
     return st
 end
 

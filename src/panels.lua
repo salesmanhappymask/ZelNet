@@ -244,14 +244,15 @@ function Panels:drawNavmap()
     local s = self:surface("navmap")
     if not s then return end
     local al = self.con.ctx.airlock
-    local list, contain = {}, {}
+    local list, contain, areas = {}, {}, nil
     if al and al.enabled ~= false then
         list = self.con:call(al, "list") or {}
         contain = self.con:call(al, "containment") or {}
+        areas = self.con:call(al, "areaStates", navmap.STATION)
     end
     local clock
     pcall(function() clock = "Day " .. os.day() .. "  " .. textutils.formatTime(os.time(), true) end)
-    navmap.draw(s, list, contain, { frame = (self.ticks or 0) % 2, release = version.label(), clock = clock })
+    navmap.draw(s, list, contain, { frame = (self.ticks or 0) % 2, release = version.label(), clock = clock, areas = areas })
     s:flush()
 end
 

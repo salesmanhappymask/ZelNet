@@ -1725,7 +1725,7 @@ function Console:airlocks()
         local ix, iy, iw, ih = page:container("Sealing Manager", sub)
         if #held > 0 then
             local h1 = held[1]
-            local note = (h1.hold and "HELD SHUT: " or "CONTAINMENT: ") .. tostring(h1.station) .. " (" .. tostring(h1.cause or "?") .. ")" .. (#held > 1 and (" +" .. (#held - 1)) or "")
+            local note = (h1.manual and "LOCKDOWN: " or (h1.hold and "HELD SHUT: " or "CONTAINMENT: ")) .. tostring(h1.station) .. " (" .. tostring(h1.cause or "?") .. ")" .. (#held > 1 and (" +" .. (#held - 1)) or "")
             surf:field(ix, iy, iw, note, c.text, h1.hold and c.bad or c.orange)
             iy = iy + 1
             ih = ih - 1
@@ -1749,7 +1749,7 @@ function Console:airlocks()
             end
         end
         local buttons = { { label = "Poll", key = "r" }, { label = "Find", key = "d" } }
-        if #held > 0 then buttons[3] = { label = "Release", key = "x" } end
+        if #held > 0 then buttons[3] = { label = "Release", key = "x" } elseif (s.nodes or 0) > 0 then buttons[3] = { label = "Lockdown", key = "l", bg = c.bad } end
         self:footer(page, ix, iy + ih - 1, iw, buttons)
         surf:flush()
         local ev, a, b, cc = compat.pullUI()
@@ -1768,7 +1768,7 @@ function Console:airlocks()
                 action = "rec:" .. recRows[sel]
             end
         elseif ev == "char" then
-            if a == "r" or a == "R" then action = "act:1" elseif a == "d" or a == "D" then action = "act:2" elseif (a == "x" or a == "X") and #held > 0 then action = "act:3" end
+            if a == "r" or a == "R" then action = "act:1" elseif a == "d" or a == "D" then action = "act:2" elseif (a == "x" or a == "X") and #held > 0 then action = "act:3" elseif (a == "l" or a == "L") and #held == 0 and (s.nodes or 0) > 0 then action = "act:3" end
         elseif ev == "timer" and a == timer then
             timer = os.startTimer(1)
         elseif ev == "term_resize" then
@@ -1779,6 +1779,9 @@ function Console:airlocks()
             self:call(al, "poll")
         elseif action == "act:2" then
             self:call(al, "discover")
+        elseif action == "act:3" and #held == 0 then
+            self:airlockLockdown()
+            timer = os.startTimer(1)
         elseif action == "act:3" and #held > 0 then
             local h1 = held[1]
             if ui.confirm(surf, "Release Containment", "Stop containment for " .. tostring(h1.station) .. "? Doors go back to the normal rule: each door opens when its zone and the far side both have oxygen.", { yes = "Release" }) then
@@ -1795,6 +1798,23 @@ function Console:airlocks()
             end
         end
     end
+end
+
+function Console:airlockLockdown()
+    local al = self.ctx.airlock
+    local stations = self:call(al, "stations") or {}
+    if #stations == 0 then return nil end
+    local station = stations[1]
+    if #stations > 1 then
+        local items = {}
+        for _, st in ipairs(stations) do items[#items + 1] = { label = st, value = st } end
+        station = self:choose("Full Lockdown", "Which station?", items)
+        if not station then return nil end
+    end
+    if not ui.confirm(self.surf, "Full Lockdown", "Seal every door of " .. station .. " now? They stay sealed until you press Release on this screen.", { yes = "Lock down" }) then return nil end
+    local ok, err = self:call(al, "lockdown", station, "console")
+    if not ok then self:result("Full Lockdown", false, err or "Could not lock down.") end
+    return nil
 end
 
 function Console:findAirlock(id)

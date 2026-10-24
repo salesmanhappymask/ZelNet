@@ -18,8 +18,14 @@ M.IGNORED = { alk_ack = true, alk_cmd = true, alk_poll = true, alk_discover = tr
 M.RELAY_PORT = "zn.alk"
 M.PATH_HOLD = 600
 M.CONTAIN_MIN = 15
-M.SETTLE = 10
-M.CONTAIN_TICK = 2
+M.SETTLE = 8
+M.CONTAIN_TICK = 1
+M.LOSS_CONFIRM = 2
+M.GRACE = 8
+M.OPEN_GAP = 4
+M.PROBE = 15
+M.BACKOFF = 30
+M.BACKOFF_MAX = 600
 M.TRIP_WINDOW = 600
 M.TRIP_LIMIT = 3
 
@@ -75,7 +81,9 @@ function M.new(ctx)
     self.started = false
     self.counters = { reports = 0, acks = 0, commands = 0, polls = 0, ignored = 0 }
     self.contain = {}
-    self.containOn = self.cfg.containment ~= false
+    self.lastOpen = {}
+    self.layouts = {}
+    self.containOn = self.cfg.containment == true
     return self
 end
 
@@ -197,7 +205,7 @@ function Airlock:load()
     if type(t) == "table" and type(t.contain) == "table" then
         for station, c in pairs(t.contain) do
             if type(station) == "string" and type(c) == "table" and not self.contain[station] then
-                self.contain[station] = { since = now, cause = cleanName(c.cause), hold = c.hold == true or nil, trips = {} }
+                self.contain[station] = { since = now, cause = cleanName(c.cause), hold = c.hold == true or nil, manual = c.manual == true or nil, trips = {} }
             end
         end
     end
@@ -218,6 +226,7 @@ function Airlock:load()
                 }
                 if type(rec.oxygenated) ~= "boolean" then rec.oxygenated = nil end
                 if rec.oxygenated == true then rec.oxyAt = now - M.SETTLE end
+                if rec.oxygenated == false then rec.lowAt = now - M.GRACE end
                 if type(rec.lockSync) ~= "boolean" then rec.lockSync = nil end
                 self.nodes[key] = M.normalize(rec)
             end
@@ -251,7 +260,7 @@ function Airlock:snapshot()
         }
     end
     local contain = {}
-    for station, c in pairs(self.contain) do contain[station] = { cause = c.cause, hold = c.hold } end
+    for station, c in pairs(self.contain) do contain[station] = { cause = c.cause, hold = c.hold, manual = c.manual } end
     return { v = 1, nodes = out, contain = contain }
 end
 
@@ -287,19 +296,95 @@ function Airlock:stable(r, now)
     return r.oxyAt == nil or now - r.oxyAt >= M.SETTLE
 end
 
+function Airlock:layout(station)
+    local l = self.layouts[station]
+    if l ~= nil then return l or nil end
+    l = false
+    local ok, nav = pcall(need, "navmap")
+    if ok and type(nav) == "table" and nav.STATION == station and type(nav.COMMONS) == "table" then
+        l = {}
+        for _, c in ipairs(nav.COMMONS) do
+            for _, name in ipairs(c.doors) do l[name:lower()] = c.id end
+        end
+    end
+    self.layouts[station] = l
+    return l or nil
+end
+
+function Airlock:farArea(rec)
+    local station = M.stationOf(rec.group)
+    local l = self:layout(station)
+    local id = l and type(rec.name) == "string" and l[rec.name:lower()]
+    if not id then return { members = { rec }, doors = { rec } } end
+    local area = { members = {}, doors = {} }
+    for _, r in ipairs(self:members(station)) do
+        if r.role ~= "sensor" and type(r.name) == "string" and l[r.name:lower()] == id then
+            area.members[#area.members + 1] = r
+            area.doors[#area.doors + 1] = r
+        end
+    end
+    return area
+end
+
+function Airlock:zoneArea(group)
+    local area = { members = {}, doors = {} }
+    for _, r in pairs(self.nodes) do
+        if r.group == group then
+            if r.suffix == "C" then area.members[#area.members + 1] = r
+            elseif r.role ~= "sensor" then area.doors[#area.doors + 1] = r end
+        end
+    end
+    return area
+end
+
+function Airlock:areaState(area, now)
+    local recent = false
+    for _, d in ipairs(area.doors) do
+        if d.openedAt and now - d.openedAt < M.GRACE then recent = true end
+    end
+    local lows, settling = 0, false
+    for _, m in ipairs(area.members) do
+        if m.oxygenated == false then lows = lows + 1
+        elseif m.oxygenated == true and m.oxyAt and now - m.oxyAt < M.SETTLE then settling = true end
+    end
+    local wait = (recent and lows < 2) and M.GRACE or M.LOSS_CONFIRM
+    local confirmed = false
+    for _, m in ipairs(area.members) do
+        if m.oxygenated == false and now - (m.lowAt or -math.huge) >= wait then confirmed = true end
+    end
+    if confirmed then return "lost" end
+    if lows > 0 or settling then return "pending" end
+    return "holding"
+end
+
 function Airlock:desired(rec)
     if rec.role == "sensor" then return false end
     if rec.locked then return true end
     if rec.manual == "seal" then return true end
     if rec.manual == "unseal" then return false end
-    if rec.oxygenated == false then return true end
-    local s = self:groupSensor(rec.group)
-    if s and s.oxygenated == false then return true end
-    local c = self.contain[M.stationOf(rec.group)]
-    if c then
-        local now = compat.now()
-        if c.hold or now - c.since < M.CONTAIN_MIN then return true end
-        if not self:stable(rec, now) or (s and not self:stable(s, now)) then return true end
+    local now = compat.now()
+    local station = M.stationOf(rec.group)
+    local c = self.contain[station]
+    if c and (c.hold or now - c.since < M.CONTAIN_MIN) then return true end
+    local zone = self:areaState(self:zoneArea(rec.group), now)
+    local far = self:areaState(self:farArea(rec), now)
+    if zone == "lost" or far == "lost" then return true end
+    if rec.sealed ~= true then
+        if zone ~= "holding" or far ~= "holding" or (rec.openedAt and now - rec.openedAt < M.PROBE) then self.pendingSettle = true end
+        return false
+    end
+    if zone ~= "holding" or far ~= "holding" then
+        self.pendingSettle = true
+        return true
+    end
+    if rec.backoffUntil and now < rec.backoffUntil then
+        self.pendingSettle = true
+        return true
+    end
+    local last = self.lastOpen[station]
+    if last and now - last < M.OPEN_GAP then
+        self.pendingSettle = true
+        return true
     end
     return false
 end
@@ -309,6 +394,7 @@ function Airlock:members(station)
     for _, r in pairs(self.nodes) do
         if M.stationOf(r.group) == station then out[#out + 1] = r end
     end
+    table.sort(out, function(a, b) return tostring(a.name) < tostring(b.name) end)
     return out
 end
 
@@ -337,6 +423,30 @@ function Airlock:startContainment(rec)
     return true
 end
 
+function Airlock:stations()
+    local seen, out = {}, {}
+    for _, r in pairs(self.nodes) do
+        local st = M.stationOf(r.group)
+        if st ~= "" and not seen[st] then
+            seen[st] = true
+            out[#out + 1] = st
+        end
+    end
+    table.sort(out)
+    return out
+end
+
+function Airlock:lockdown(station, actor)
+    if type(station) ~= "string" or #self:members(station) == 0 then return nil, "Unknown station." end
+    local c = self.contain[station]
+    self.contain[station] = { since = compat.now(), cause = "lockdown", hold = true, manual = true, trips = c and c.trips or {} }
+    self:applyStation(station)
+    self:changed(nil, true)
+    self:save()
+    self:audit(actor or "console", "lockdown", station, "every door sealed", true)
+    return true
+end
+
 function Airlock:releaseContainment(station, actor)
     local c = self.contain[station]
     if not c then return nil, "No containment is active there." end
@@ -350,8 +460,8 @@ end
 
 function Airlock:containTick()
     local now = compat.now()
+    self.pendingSettle = false
     for station, c in compat.spairs(self.contain) do
-        self:applyStation(station)
         if not c.hold and now - c.since >= M.CONTAIN_MIN then
             local clear = true
             for _, r in ipairs(self:members(station)) do
@@ -360,19 +470,36 @@ function Airlock:containTick()
             if clear then
                 self.contain[station] = nil
                 self:audit("airlock", "containment_clear", station, "every zone holds oxygen", true)
-                self:applyStation(station)
                 self:changed(nil, true)
             end
         end
     end
+    for _, r in compat.spairs(self.nodes) do
+        if r.role ~= "sensor" then self:applyPolicy(r, true) end
+    end
     if self.urgent then self:save() end
+end
+
+function Airlock:areaStates(station)
+    local now = compat.now()
+    local out = { zones = {}, commons = {} }
+    local l = self:layout(station)
+    for _, r in ipairs(self:members(station)) do
+        if r.group and out.zones[r.group] == nil then
+            local z = self:zoneArea(r.group)
+            out.zones[r.group] = #z.members > 0 and self:areaState(z, now) or false
+        end
+        local key = l and r.role ~= "sensor" and type(r.name) == "string" and l[r.name:lower()]
+        if key and out.commons[key] == nil then out.commons[key] = self:areaState(self:farArea(r), now) end
+    end
+    return out
 end
 
 function Airlock:containment()
     local now = compat.now()
     local out = {}
     for station, c in pairs(self.contain) do
-        out[#out + 1] = { station = station, cause = c.cause, hold = c.hold, age = now - c.since, trips = #(c.trips or {}) }
+        out[#out + 1] = { station = station, cause = c.cause, hold = c.hold, manual = c.manual, age = now - c.since, trips = #(c.trips or {}) }
     end
     table.sort(out, function(a, b) return a.station < b.station end)
     return out
@@ -384,7 +511,21 @@ function Airlock:sendCommand(rec)
 end
 
 function Airlock:applyPolicy(rec, announce)
+    local prev = rec.sealed
     local desired = self:desired(rec)
+    if rec.role ~= "sensor" then
+        local now = compat.now()
+        if prev == true and desired == false then
+            rec.openedAt = now
+            self.lastOpen[M.stationOf(rec.group)] = now
+        elseif prev == false and desired == true and rec.openedAt and now - rec.openedAt < M.PROBE and not rec.locked and not rec.manual then
+            rec.backoffN = (rec.backoffN or 0) + 1
+            rec.backoffUntil = now + math.min(M.BACKOFF_MAX, M.BACKOFF * 2 ^ (rec.backoffN - 1))
+            self:audit("airlock", "door_retry", rec.name, "lost air right after opening; next try in " .. math.floor(rec.backoffUntil - now) .. "s", false)
+        elseif prev == false and desired == false and rec.openedAt and now - rec.openedAt >= M.PROBE then
+            rec.backoffN = nil
+        end
+    end
     local lockFlag = rec.locked and true or false
     local changed = (rec.sealed ~= desired) or (rec.lockSync ~= lockFlag)
     if rec.sealed ~= desired then self:changed(rec) end
@@ -428,8 +569,10 @@ function Airlock:handleMessage(senderID, msg, via)
     if msg.role == "sensor" or msg.role == "door" then rec.role = msg.role end
     if type(msg.oxygenated) == "boolean" then
         if msg.oxygenated and rec.oxygenated ~= true then rec.oxyAt = isNew and (compat.now() - M.SETTLE) or compat.now() end
+        if not msg.oxygenated and rec.oxygenated ~= false then rec.lowAt = isNew and (compat.now() - M.GRACE) or compat.now() end
         rec.oxygenated = msg.oxygenated
     end
+    if type(msg.sealed) == "boolean" and msg.role ~= "sensor" then rec.sealed = msg.sealed end
     rec.lastSeen = compat.now()
     rec.seen = compat.stamp()
     rec.online = true
@@ -441,12 +584,12 @@ function Airlock:handleMessage(senderID, msg, via)
     if rec.oxygenated == false and oldOxy ~= false then
         self:startContainment(rec)
     end
-    self:applyGroup(rec.group)
-    local desired = self:desired(rec)
+    self:applyStation(M.stationOf(rec.group))
     self.counters.acks = self.counters.acks + 1
+    rec.lockSync = rec.locked and true or false
     self:rsend(id, {
         type = "alk_ack", reqID = msg.reqID, name = rec.name, role = rec.role,
-        command = desired and "seal" or "unseal", locked = rec.locked and true or false,
+        command = (rec.role ~= "sensor" and rec.sealed) and "seal" or "unseal", locked = rec.locked and true or false,
     })
     self:noteReport(rec, msg.type, isNew, wasOnline, oldOxy)
     local structural = isNew or wasOnline == false or oldOxy ~= rec.oxygenated or oldName ~= rec.name or oldRole ~= rec.role
@@ -504,11 +647,18 @@ function Airlock:find(id)
     return rec
 end
 
+function Airlock:clearWait(rec)
+    rec.backoffN = nil
+    rec.backoffUntil = nil
+    self.lastOpen[M.stationOf(rec.group)] = nil
+end
+
 function Airlock:setManual(id, mode, actor)
     local rec, err = self:find(id)
     if not rec then return nil, err end
     if not M.MODES[mode] then return nil, "Unknown mode." end
     if mode == "auto" then rec.manual = nil else rec.manual = mode end
+    self:clearWait(rec)
     local desired = self:applyPolicy(rec, true)
     self:applyGroup(rec.group)
     self:changed(rec, true)
@@ -522,6 +672,7 @@ function Airlock:setLocked(id, locked, actor)
     if not rec then return nil, err end
     if rec.role == "sensor" then return nil, "Sensors have no door to lock." end
     rec.locked = locked and true or nil
+    self:clearWait(rec)
     self:applyPolicy(rec, false)
     self:sendCommand(rec)
     rec.lockSync = rec.locked and true or false
@@ -663,7 +814,7 @@ function Airlock:step(timers, ev, a, b)
     elseif ev == "peripheral" then
         self:openRednet()
     end
-    if not timers.contain and next(self.contain) then timers.contain = compat.quietTimer(M.CONTAIN_TICK) end
+    if not timers.contain and (next(self.contain) or self.pendingSettle) then timers.contain = compat.quietTimer(M.CONTAIN_TICK) end
 end
 
 function Airlock:run()
