@@ -3,6 +3,12 @@ local SILENT_AFTER = 960
 local SEARCH_EVERY = 60
 local PEER_DELAY = 5
 local OPEN_GRACE = 10
+local PEER_EVERY = 10
+local PEER_STALE = 60
+local HEARTBEAT = 30
+local RETRY_EVERY = 1
+local RETRY_MAX = 5
+local PEER_CONFIRM = 3
 
 local SIDES = { "top", "bottom", "left", "right", "front", "back" }
 
@@ -34,6 +40,8 @@ local state = {
 local monitor = nil
 local lastHeard = nil
 local unsealedAt = nil
+local peer = nil
+local pending = nil
 
 local function trim(s)
     s = tostring(s or "")
@@ -122,7 +130,13 @@ local function applyPhysical(sealed)
     state.sealed = sealed
 end
 
-local function applyCommand(cmd, locked)
+local function interlocked()
+    if peer == nil or not peer.low or os.clock() - peer.at >= PEER_STALE then return false end
+    local afterOpen = unsealedAt ~= nil and peer.since >= unsealedAt and peer.since - unsealedAt < OPEN_GRACE
+    return not afterOpen or os.clock() - peer.since >= PEER_CONFIRM
+end
+
+local function applyCommand(cmd, locked, force)
     if cmd == "lock" then
         state.locked = true
     elseif cmd == "unlock" then
@@ -135,6 +149,9 @@ local function applyCommand(cmd, locked)
     elseif cmd == "seal" then
         applyPhysical(true)
     elseif cmd == "unseal" then
+        if interlocked() and not force and state.sealed then
+            return "refused"
+        end
         if state.sealed then unsealedAt = os.clock() end
         applyPhysical(false)
     end
@@ -227,7 +244,7 @@ local function paint(dev, isTerm)
         if sensor then
             put(1, sy + 1, centerText(w, "Sensor"), C_MUTED, C_BG)
         else
-            put(1, sy + 1, centerText(w, "Door:" .. (locked and "LOCK" or (state.sealed and "SEAL" or "OPEN"))),
+            put(1, sy + 1, centerText(w, "Door:" .. (locked and "LOCK" or (state.sealed and (interlocked() and "HELD" or "SEAL") or "OPEN"))),
                 locked and C_LOCK or (state.sealed and C_ERR or C_OK), C_BG)
         end
         put(1, sy + 2, centerText(w, "Srv:" .. serverText(true)), linked() and C_MUTED or C_LOCK, C_BG)
@@ -237,7 +254,7 @@ local function paint(dev, isTerm)
         if sensor then
             put(2, sy + 1, "Role    : oxygen sensor", C_MUTED, C_BG)
         else
-            put(2, sy + 1, "Bulkhead: " .. (locked and "LOCKED" or (state.sealed and "SEALED" or "OPEN")),
+            put(2, sy + 1, "Bulkhead: " .. (locked and "LOCKED" or (state.sealed and (interlocked() and "SEALED, ZONE NO O2" or "SEALED") or "OPEN")),
                 locked and C_LOCK or (state.sealed and C_ERR or C_OK), C_BG)
         end
         put(2, sy + 2, "Server  : " .. serverText(false), linked() and C_MUTED or C_LOCK, C_BG)
@@ -265,13 +282,18 @@ local function message(kind)
         oxygenated = state.oxygenated,
         sealed = state.sealed,
         locked = state.locked,
+        interlock = (not isSensor()) and interlocked() or nil,
         reqID = newReqID(),
     }
 end
 
 local function sendStatus(kind)
     if linked() then
-        rednet.send(state.serverId, message(kind))
+        local m = message(kind)
+        rednet.send(state.serverId, m)
+        if kind == "alk_status" then
+            pending = { reqID = m.reqID, tries = 1, timer = os.startTimer(RETRY_EVERY) }
+        end
     else
         rednet.broadcast(message(state.registered and "alk_hello" or "alk_register"))
     end
@@ -299,8 +321,10 @@ end
 local function onAck(id, msg)
     adopt(id)
     if not state.registered then state.registered = true end
-    applyCommand(msg.command, msg.locked)
+    if pending and msg.reqID == pending.reqID then pending = nil end
+    local res = applyCommand(msg.command, msg.locked, msg.force)
     saveState()
+    return res
 end
 
 local function bootHandshake()
@@ -461,6 +485,8 @@ local function runtimeLoop()
     local failsafeTimer = nil
     local peerTimer = nil
     local searchTimer = os.startTimer(SEARCH_EVERY)
+    local beatTimer = os.startTimer(HEARTBEAT)
+    local peerBeat = os.startTimer(PEER_EVERY)
     if (not state.oxygenated) and state.failsafe and not state.sealed and not isSensor() then
         failsafeTimer = os.startTimer(state.failsafeDelay)
     end
@@ -477,6 +503,7 @@ local function runtimeLoop()
                 saveState()
                 sendStatus("alk_status")
                 tellPeers()
+                if isSensor() then peerBeat = os.startTimer(1) end
                 render()
                 if (not o2) and state.failsafe and not state.sealed and not isSensor() then
                     local justOpened = unsealedAt ~= nil and os.clock() - unsealedAt < OPEN_GRACE
@@ -503,6 +530,20 @@ local function runtimeLoop()
                     sendStatus("alk_status")
                     render()
                 end
+            elseif pending and ev[2] == pending.timer then
+                if pending.tries >= RETRY_MAX then
+                    pending = nil
+                elseif linked() then
+                    local m = message("alk_status")
+                    rednet.send(state.serverId, m)
+                    pending = { reqID = m.reqID, tries = pending.tries + 1, timer = os.startTimer(RETRY_EVERY) }
+                end
+            elseif ev[2] == beatTimer then
+                beatTimer = os.startTimer(HEARTBEAT)
+                if linked() then rednet.send(state.serverId, message("alk_hello")) end
+            elseif ev[2] == peerBeat then
+                peerBeat = os.startTimer(PEER_EVERY)
+                tellPeers()
             elseif ev[2] == searchTimer then
                 searchTimer = os.startTimer(SEARCH_EVERY)
                 if not linked() then
@@ -519,7 +560,14 @@ local function runtimeLoop()
                     announce()
                     render()
                 elseif msg.type == "alk_peer" then
-                    if not isSensor() and nameBase(state.name) ~= nil and msg.group == nameBase(state.name) then
+                    if not isSensor() and nameBase(state.name) ~= nil and msg.group == nameBase(state.name) and type(msg.oxygenated) == "boolean" then
+                        local was = interlocked()
+                        local low = not msg.oxygenated
+                        peer = { low = low, at = os.clock(), since = (low and peer and peer.low) and peer.since or os.clock() }
+                        if was ~= interlocked() then
+                            sendStatus("alk_status")
+                            render()
+                        end
                         local justOpened = unsealedAt ~= nil and os.clock() - unsealedAt < OPEN_GRACE
                         if msg.oxygenated == false and state.failsafe and not state.sealed and not justOpened then
                             peerTimer = peerTimer or os.startTimer(PEER_DELAY)
@@ -528,15 +576,16 @@ local function runtimeLoop()
                         end
                     end
                 elseif msg.type == "alk_ack" and (id == state.serverId or not linked()) then
-                    onAck(id, msg)
+                    if onAck(id, msg) == "refused" then sendStatus("alk_status") end
                     render()
                 elseif id == state.serverId then
                     lastHeard = os.clock()
                     if msg.type == "alk_poll" then
                         sendStatus("alk_status_reply")
                     elseif msg.type == "alk_cmd" then
-                        applyCommand(msg.action, msg.locked)
+                        local res = applyCommand(msg.action, msg.locked, msg.force)
                         saveState()
+                        if res == "refused" then sendStatus("alk_status") end
                         render()
                     end
                 end

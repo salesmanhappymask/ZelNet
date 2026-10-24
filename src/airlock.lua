@@ -20,7 +20,7 @@ M.PATH_HOLD = 600
 M.CONTAIN_MIN = 15
 M.SETTLE = 8
 M.CONTAIN_TICK = 1
-M.LOSS_CONFIRM = 2
+M.LOSS_CONFIRM = 3
 M.GRACE = 8
 M.OPEN_GAP = 4
 M.PROBE = 15
@@ -331,7 +331,10 @@ function Airlock:zoneArea(group)
     for _, r in pairs(self.nodes) do
         if r.group == group then
             if r.suffix == "C" then area.members[#area.members + 1] = r
-            elseif r.role ~= "sensor" then area.doors[#area.doors + 1] = r end
+            elseif r.role ~= "sensor" then
+                area.doors[#area.doors + 1] = r
+                if r.interlock and r.online ~= false and r.interlockAt and compat.now() - r.interlockAt >= M.LOSS_CONFIRM then area.interlocked = true end
+            end
         end
     end
     return area
@@ -347,12 +350,14 @@ function Airlock:areaState(area, now)
         if m.oxygenated == false then lows = lows + 1
         elseif m.oxygenated == true and m.oxyAt and now - m.oxyAt < M.SETTLE then settling = true end
     end
+    if area.interlocked then return "lost" end
     local wait = (recent and lows < 2) and M.GRACE or M.LOSS_CONFIRM
-    local confirmed = false
+    local known, confirmed = 0, 0
     for _, m in ipairs(area.members) do
-        if m.oxygenated == false and now - (m.lowAt or -math.huge) >= wait then confirmed = true end
+        if m.oxygenated ~= nil then known = known + 1 end
+        if m.oxygenated == false and now - (m.lowAt or -math.huge) >= wait then confirmed = confirmed + 1 end
     end
-    if confirmed then return "lost" end
+    if confirmed > 0 and (confirmed * 2 > known or known <= 2) then return "lost" end
     if lows > 0 or settling then return "pending" end
     return "holding"
 end
@@ -363,6 +368,12 @@ function Airlock:desired(rec)
     if rec.manual == "seal" then return true end
     if rec.manual == "unseal" then return false end
     local now = compat.now()
+    if rec.interlock and (rec.sealed or now - (rec.interlockAt or now) >= M.LOSS_CONFIRM) then
+        if not rec.sealed then return true end
+        self.pendingSettle = true
+        return true
+    end
+    if rec.interlock then self.pendingSettle = true end
     local station = M.stationOf(rec.group)
     local c = self.contain[station]
     if c and (c.hold or now - c.since < M.CONTAIN_MIN) then return true end
@@ -507,7 +518,7 @@ end
 
 function Airlock:sendCommand(rec)
     self.counters.commands = self.counters.commands + 1
-    self:rsend(rec.id, { type = "alk_cmd", action = rec.sealed and "seal" or "unseal", locked = rec.locked and true or false })
+    self:rsend(rec.id, { type = "alk_cmd", action = rec.sealed and "seal" or "unseal", locked = rec.locked and true or false, force = rec.manual == "unseal" or nil })
 end
 
 function Airlock:applyPolicy(rec, announce)
@@ -518,7 +529,7 @@ function Airlock:applyPolicy(rec, announce)
         if prev == true and desired == false then
             rec.openedAt = now
             self.lastOpen[M.stationOf(rec.group)] = now
-        elseif prev == false and desired == true and rec.openedAt and now - rec.openedAt < M.PROBE and not rec.locked and not rec.manual then
+        elseif prev == false and desired == true and rec.openedAt and now - rec.openedAt < M.PROBE and not rec.locked and not rec.manual and not rec.interlock then
             rec.backoffN = (rec.backoffN or 0) + 1
             rec.backoffUntil = now + math.min(M.BACKOFF_MAX, M.BACKOFF * 2 ^ (rec.backoffN - 1))
             self:audit("airlock", "door_retry", rec.name, "lost air right after opening; next try in " .. math.floor(rec.backoffUntil - now) .. "s", false)
@@ -573,6 +584,11 @@ function Airlock:handleMessage(senderID, msg, via)
         rec.oxygenated = msg.oxygenated
     end
     if type(msg.sealed) == "boolean" and msg.role ~= "sensor" then rec.sealed = msg.sealed end
+    if msg.role ~= "sensor" then
+        local il = msg.interlock == true or nil
+        if il and not rec.interlock then rec.interlockAt = compat.now() end
+        rec.interlock = il
+    end
     rec.lastSeen = compat.now()
     rec.seen = compat.stamp()
     rec.online = true
@@ -590,6 +606,7 @@ function Airlock:handleMessage(senderID, msg, via)
     self:rsend(id, {
         type = "alk_ack", reqID = msg.reqID, name = rec.name, role = rec.role,
         command = (rec.role ~= "sensor" and rec.sealed) and "seal" or "unseal", locked = rec.locked and true or false,
+        force = rec.manual == "unseal" or nil,
     })
     self:noteReport(rec, msg.type, isNew, wasOnline, oldOxy)
     local structural = isNew or wasOnline == false or oldOxy ~= rec.oxygenated or oldName ~= rec.name or oldRole ~= rec.role
