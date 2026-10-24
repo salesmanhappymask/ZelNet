@@ -538,6 +538,28 @@ t.case("upload falls back to dpaste and reports both refusals", function()
     _G.http = nil
 end)
 
+t.case("an area that keeps losing air must hold longer before doors open into it", function()
+    resetNet()
+    local al = mk()
+    local ids = athena(al)
+    local hub = { "Athena-A", "Athena2-A", "Athena3-A", "Athena4-A" }
+    local function hubAir(v)
+        for _, n in ipairs(hub) do al:handleMessage(ids[n], { type = "alk_status", oxygenated = v }) end
+    end
+    for _ = 1, 3 do
+        hubAir(false)
+        tick(al, airlock.LOSS_CONFIRM + 1)
+        hubAir(true)
+        tick(al, 4)
+    end
+    t.ok(table.concat(al.events, "\n"):find("area area hub UNSTABLE", 1, true), "logged as unstable")
+    t.ok(al:logBundle():find("area hub=", 1, true) and al:logBundle():find("UNSTABLE(3 drops)", 1, true))
+    tick(al, airlock.SETTLE + 2)
+    t.eq(al:areaStates("Athena").commons.hub, "pending", "8 seconds is no longer enough")
+    tick(al, airlock.UNSTABLE_SETTLE)
+    t.eq(al:areaStates("Athena").commons.hub, "holding", "30 seconds of steady air is")
+end)
+
 t.case("manual modes, locking, rename and remove", function()
     resetNet()
     local al, ctx = mk()

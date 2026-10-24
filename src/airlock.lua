@@ -27,6 +27,9 @@ M.OPEN_GAP = 4
 M.PROBE = 15
 M.BACKOFF = 30
 M.BACKOFF_MAX = 600
+M.UNSTABLE_WINDOW = 120
+M.UNSTABLE_DROPS = 3
+M.UNSTABLE_SETTLE = 30
 M.LOG_MAX = 800
 M.LOG_FILE = "/zn_airlock.log"
 M.LOG_CAP = 60000
@@ -100,6 +103,7 @@ function M.new(ctx)
     self.events = {}
     self.logBuf = {}
     self.areaSeen = {}
+    self.areaDrops = {}
     self.dumps = {}
     self.containOn = self.cfg.containment == true
     return self
@@ -154,9 +158,29 @@ function Airlock:noteAreas(station)
             if self.areaSeen[k] ~= now then
                 if self.areaSeen[k] ~= nil then self:event("area " .. kind .. " " .. tostring(key) .. " " .. self.areaSeen[k] .. " -> " .. now) end
                 self.areaSeen[k] = now
+                if now == "lost" then
+                    local t = compat.now()
+                    local drops = {}
+                    for _, at in ipairs(self.areaDrops[k] or {}) do
+                        if t - at < M.UNSTABLE_WINDOW then drops[#drops + 1] = at end
+                    end
+                    drops[#drops + 1] = t
+                    self.areaDrops[k] = drops
+                    if #drops == M.UNSTABLE_DROPS then
+                        self:event("area " .. kind .. " " .. tostring(key) .. " UNSTABLE: lost air " .. #drops .. " times in " .. M.UNSTABLE_WINDOW .. "s; doors into it now wait " .. M.UNSTABLE_SETTLE .. "s of steady air")
+                    end
+                end
             end
         end
     end
+end
+
+function Airlock:unstable(key, now)
+    local n = 0
+    for _, at in ipairs(self.areaDrops[key] or {}) do
+        if now - at < M.UNSTABLE_WINDOW then n = n + 1 end
+    end
+    return n >= M.UNSTABLE_DROPS, n
 end
 
 function Airlock:program()
@@ -240,8 +264,14 @@ function Airlock:logBundle(header)
     for _, station in ipairs(self:stations()) do
         local st = self:areaStates(station)
         local parts = {}
-        for k, v in pairs(st.zones) do parts[#parts + 1] = "zone " .. k .. "=" .. tostring(v) end
-        for k, v in pairs(st.commons) do parts[#parts + 1] = "area " .. k .. "=" .. tostring(v) end
+        local function tag(kind, k)
+            local bad, n = self:unstable(station .. ":" .. kind .. ":" .. tostring(k), now)
+            if bad then return " UNSTABLE(" .. n .. " drops)" end
+            if n > 0 then return " (" .. n .. " drops)" end
+            return ""
+        end
+        for k, v in pairs(st.zones) do parts[#parts + 1] = "zone " .. k .. "=" .. tostring(v) .. tag("zone", k) end
+        for k, v in pairs(st.commons) do parts[#parts + 1] = "area " .. k .. "=" .. tostring(v) .. tag("area", k) end
         table.sort(parts)
         add(station .. ": " .. table.concat(parts, ", "))
     end
@@ -529,7 +559,7 @@ function Airlock:farArea(rec)
     local l = self:layout(station)
     local id = l and type(rec.name) == "string" and l[rec.name:lower()]
     if not id then return { members = { rec }, doors = { rec } } end
-    local area = { members = {}, doors = {} }
+    local area = { members = {}, doors = {}, key = station .. ":area:" .. id }
     for _, r in ipairs(self:members(station)) do
         if r.role ~= "sensor" and type(r.name) == "string" and l[r.name:lower()] == id then
             area.members[#area.members + 1] = r
@@ -540,7 +570,7 @@ function Airlock:farArea(rec)
 end
 
 function Airlock:zoneArea(group)
-    local area = { members = {}, doors = {} }
+    local area = { members = {}, doors = {}, key = M.stationOf(group) .. ":zone:" .. tostring(group) }
     for _, r in pairs(self.nodes) do
         if r.group == group then
             if r.suffix == "C" then area.members[#area.members + 1] = r
@@ -558,10 +588,11 @@ function Airlock:areaState(area, now)
     for _, d in ipairs(area.doors) do
         if d.openedAt and now - d.openedAt < M.GRACE then recent = true end
     end
+    local settle = (area.key and self:unstable(area.key, now)) and M.UNSTABLE_SETTLE or M.SETTLE
     local lows, settling = 0, false
     for _, m in ipairs(area.members) do
         if m.oxygenated == false then lows = lows + 1
-        elseif m.oxygenated == true and m.oxyAt and now - m.oxyAt < M.SETTLE then settling = true end
+        elseif m.oxygenated == true and m.oxyAt and now - m.oxyAt < settle then settling = true end
     end
     if area.interlocked then return "lost" end
     local wait = (recent and lows < 2) and M.GRACE or M.LOSS_CONFIRM
