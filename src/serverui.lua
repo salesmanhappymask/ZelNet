@@ -1524,6 +1524,7 @@ function Console:bridgeMenu(b)
             if b[k] ~= nil then lines[#lines + 1] = k .. ": " .. tostring(b[k]) end
         end
         if b.lastTrip then lines[#lines + 1] = "lastTrip: " .. util.fmtFixed(b.lastTrip, 1) .. " s" end
+        if b.lastErrorAge then lines[#lines + 1] = "lastError was " .. util.fmtDuration(b.lastErrorAge) .. " ago" end
         self:say("Bridge " .. tostring(b.peer), lines)
     elseif choice == "recover" then
         local ok, text = self:call(srv, "resetBridge", b.peer)

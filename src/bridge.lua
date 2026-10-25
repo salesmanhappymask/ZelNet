@@ -30,6 +30,8 @@ M.ADDR_MAX = 32
 M.STALL = 90
 M.MANUAL_LOST = 20
 M.HEAL_LOG_GAP = 600
+M.BOUNCE_FAULT = 5
+M.BOUNCE_RETRY = 2
 
 local VALID_DIR = {}
 for _, d in ipairs(M.DIRECTIONS) do VALID_DIR[d] = true end
@@ -260,6 +262,7 @@ function M.new(bcfg, ctx)
     self.seen = util.newSeenSet(M.SEEN_TTL, 400)
     self.faults = {}
     self.retry = { send = { at = 0, delay = 0 }, recv = { at = 0, delay = 0 } }
+    self.bounceRun = { send = 0, recv = 0 }
     self.full = {}
     self.confirmed = {}
     self.badDirs = {}
@@ -295,6 +298,7 @@ end
 function Bridge:notice(text)
     self.stats.errors = self.stats.errors + 1
     self.stats.lastError = text
+    self.stats.lastErrorAt = compat.now()
     self:note("warn", text)
 end
 
@@ -304,6 +308,7 @@ function Bridge:setFault(side, text, backoff)
         self:note("warn", text)
     end
     self.stats.lastError = text
+    self.stats.lastErrorAt = compat.now()
     self.faults[side] = text
     if backoff then
         local r = self.retry[side]
@@ -321,6 +326,18 @@ function Bridge:recover(side)
         r.at = 0
     end
     self.full[side] = nil
+    if self.bounceRun[side] then self.bounceRun[side] = 0 end
+end
+
+function Bridge:bounced(side, why)
+    local n = self.bounceRun[side] + 1
+    self.bounceRun[side] = n
+    if n >= M.BOUNCE_FAULT then
+        self:setFault(side, why .. " (" .. M.BOUNCE_FAULT .. " times in a row)", true)
+        return
+    end
+    self:note("info", why)
+    self.retry[side].at = compat.now() + M.BOUNCE_RETRY
 end
 
 function Bridge:gearProblem()
@@ -471,7 +488,7 @@ function Bridge:eject(tess, drive, dirKey, full)
         end
         if bounced then
             self.stats.bounces = (self.stats.bounces or 0) + 1
-            return false, "the tesseract took the disk from " .. drive .. " and handed it back: the other side could not take it just now (its drive is busy, its chunk is not loaded, or a tesseract changed); trying again"
+            return false, "the tesseract took the disk from " .. drive .. " and handed it back: the other side could not take it just now (its drive is busy, its chunk is not loaded, or a tesseract changed); trying again", true
         end
         prev = not failed and d or nil
     end
@@ -563,7 +580,11 @@ function Bridge:serviceReceive(now, force)
         self:notice("returning an item in " .. drive .. " that is not a pocket computer or floppy")
     end
     if not accepted then self.stats.returned = self.stats.returned + 1 end
-    local ok, why = self:eject(c.recvTess, drive, "recvDir", force or self.full.recv)
+    local ok, why, bounce = self:eject(c.recvTess, drive, "recvDir", force or self.full.recv)
+    if not ok and bounce then
+        self:bounced("recv", "cannot return the bridge disk to " .. tostring(self.peer) .. ": " .. why)
+        return false
+    end
     if not ok then
         self:setFault("recv", "cannot return the bridge disk to " .. tostring(self.peer) .. ": " .. why, true)
         return false
@@ -649,12 +670,12 @@ function Bridge:sendBatch(drive, diskId, now)
     self.state = "sending"
     self.outgoing = items
     self:labelDisk(drive)
-    local sent, why = self:eject(self.cfg.sendTess, drive, "sendDir", self.full.send)
+    local sent, why, bounce = self:eject(self.cfg.sendTess, drive, "sendDir", self.full.send)
     self.outgoing = nil
     if not sent then
         pcall(fs.delete, path)
         self:putBack(items, false)
-        self:setFault("send", why, true)
+        if bounce then self:bounced("send", why) else self:setFault("send", why, true) end
         return false
     end
     self.inflight = { seq = self.seq, items = items, at = now, disk = diskId, bytes = #text }
@@ -736,6 +757,7 @@ function Bridge:reset(now, why)
     end
     for _, side in ipairs({ "send", "recv", "disk" }) do self.faults[side] = nil end
     self.retry = { send = { at = 0, delay = 0 }, recv = { at = 0, delay = 0 } }
+    self.bounceRun = { send = 0, recv = 0 }
     self.full = {}
     self.badDirs = {}
     self.confirmed = {}
@@ -783,6 +805,7 @@ function Bridge:step()
         end
         self.faults.gear = why
         self.stats.lastError = why
+        self.stats.lastErrorAt = compat.now()
         self.state = kind
         return false
     end
@@ -841,6 +864,7 @@ function Bridge:status()
         lastTrip = s.lastTrip,
         errors = s.errors,
         lastError = s.lastError,
+        lastErrorAge = s.lastErrorAt and (compat.now() - s.lastErrorAt) or nil,
         sendDisk = self.sendDisk,
         recvDisk = self.recvDisk,
         fault = self.faults.gear or self.faults.send or self.faults.recv or self.faults.disk,

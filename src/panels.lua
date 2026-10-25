@@ -897,6 +897,12 @@ function Panels:tab_bridges(page, area)
     for _, b in ipairs(list) do
         local bc = cfgOf[b.peer] or {}
         local bad = b.state == "fault" or b.state == "unconfigured" or b.fault
+        local problem, pcolor = b.fault or (bad and b.lastError) or nil, c.bad
+        if not problem and b.lastError and b.lastErrorAge and b.lastErrorAge < 600 then
+            problem, pcolor = util.fmtDuration(b.lastErrorAge) .. " ago, recovered since: " .. b.lastError, c.warn
+        end
+        local quiet = "none"
+        if (b.bounces or 0) > 0 then quiet = "none, " .. tostring(b.bounces) .. " handed back and retried" end
         cards[#cards + 1] = {
             title = "Bridge to " .. tostring(b.peer), accent = bad and c.bad or (b.up and c.ok or c.warn),
             lines = {
@@ -908,7 +914,9 @@ function Panels:tab_bridges(page, area)
                 { "Send", tostring(bc.sendTess or "?") .. " " .. tostring(bc.sendDrive or "?") .. " " .. tostring(bc.sendDir or "?") },
                 { "Receive", tostring(bc.recvTess or "?") .. " " .. tostring(bc.recvDrive or "?") .. " " .. tostring(bc.recvDir or "?") },
             },
-            problem = b.fault or b.lastError,
+            problem = problem,
+            problemColor = pcolor,
+            quiet = quiet,
         }
     end
     local cols = area.w >= 78 and 2 or 1
@@ -931,8 +939,8 @@ function Panels:tab_bridges(page, area)
             end
             local py = iy + #card.lines
             if py < iy + ih then
-                page:kv(ix, py, iw, "Problem", card.problem and "" or "none", c.muted)
-                if card.problem then page:wrapped(ix, py + 1, iw, iy + ih - py - 1, card.problem, c.bad) end
+                page:kv(ix, py, iw, "Problem", card.problem and "" or card.quiet, c.muted)
+                if card.problem then page:wrapped(ix, py + 1, iw, iy + ih - py - 1, card.problem, card.problemColor) end
             end
         end
     end
