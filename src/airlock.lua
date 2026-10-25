@@ -139,6 +139,7 @@ function M.new(ctx)
     self.areaSeen = {}
     self.areaDrops = {}
     self.dumps = {}
+    self.bootId = crypto.randHex(6)
     self.containOn = self.cfg.containment == true
     return self
 end
@@ -370,7 +371,24 @@ function Airlock:rednet()
     return nil
 end
 
+M.BOOT_TYPES = { alk_ack = true, alk_cmd = true, alk_poll = true, alk_discover = true }
+
+function Airlock:stampBoot(msg)
+    if type(msg) ~= "table" or not M.BOOT_TYPES[msg.type] then return msg end
+    local key = self.cfg.airlockKey
+    msg.boot = self.bootId
+    if type(key) == "string" and key ~= "" then
+        if self.bootMacKey ~= key then
+            self.bootMac = crypto.hmac(key, "alk_boot|" .. self.bootId)
+            self.bootMacKey = key
+        end
+        msg.bootMac = self.bootMac
+    end
+    return msg
+end
+
 function Airlock:rsend(id, msg)
+    self:stampBoot(msg)
     local rec = self.nodes[tostring(id)]
     if rec and rec.via and self.node then
         self.node:send(rec.via, M.RELAY_PORT, { op = "deliver", cid = tonumber(id), msg = msg })
@@ -397,6 +415,7 @@ function Airlock:routers()
 end
 
 function Airlock:rbroadcast(msg)
+    self:stampBoot(msg)
     if self.node and self.cfg.realm then
         for _, cid in ipairs(self:routers()) do
             self.node:send(self.cfg.realm .. ":" .. cid, M.RELAY_PORT, { op = "broadcast", msg = msg })

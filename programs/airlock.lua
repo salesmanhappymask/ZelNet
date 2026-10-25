@@ -57,6 +57,8 @@ local lastHeard = nil
 local unsealedAt = nil
 local peers = {}
 local pending = nil
+local bootSynced = false
+local rebootTimer = nil
 local upd = nil
 local flashOn = false
 local KEY = nil
@@ -601,6 +603,25 @@ local function adopt(id)
     lastHeard = os.clock()
 end
 
+local function checkBoot(id, msg)
+    if type(msg.boot) ~= "string" or not KEY then return end
+    if msg.boot == state.serverBoot then
+        bootSynced = true
+        return
+    end
+    if type(msg.bootMac) ~= "string" or hmac(KEY, "alk_boot|" .. msg.boot) ~= msg.bootMac then return end
+    local followed = bootSynced and state.serverBoot ~= nil and state.bootFrom == state.serverId
+    state.serverBoot = msg.boot
+    state.bootFrom = state.serverId
+    bootSynced = true
+    saveState()
+    if followed and not rebootTimer then
+        local delay = 1 + (os.getComputerID() % 12)
+        log("server restarted, rebooting in " .. delay .. "s")
+        rebootTimer = os.startTimer(delay)
+    end
+end
+
 local function noteLockdown(flag)
     flag = flag == true
     if flag ~= (state.lockdown == true) then
@@ -613,6 +634,7 @@ local function onAck(id, msg)
     adopt(id)
     if not state.registered then state.registered = true end
     if pending and msg.reqID == pending.reqID then pending = nil end
+    checkBoot(id, msg)
     noteLockdown(msg.lockdown)
     noteServerInfo(msg)
     local wasSealed = state.sealed
@@ -973,6 +995,9 @@ local function runtimeLoop()
                     rednet.send(state.serverId, m)
                     pending = { reqID = m.reqID, tries = pending.tries + 1, timer = os.startTimer(RETRY_EVERY) }
                 end
+            elseif rebootTimer and ev[2] == rebootTimer then
+                saveState()
+                os.reboot()
             elseif flashTimer and ev[2] == flashTimer then
                 flashTimer = nil
                 if flashing() then
@@ -1009,6 +1034,7 @@ local function runtimeLoop()
             if type(msg) == "table" and type(msg.type) == "string" then
                 if msg.type == "alk_discover" then
                     adopt(id)
+                    checkBoot(id, msg)
                     announce()
                     render()
                 elseif msg.type == "alk_peer" then
@@ -1051,8 +1077,10 @@ local function runtimeLoop()
                 elseif id == state.serverId then
                     lastHeard = os.clock()
                     if msg.type == "alk_poll" then
+                        checkBoot(id, msg)
                         sendStatus("alk_status_reply")
                     elseif msg.type == "alk_cmd" then
+                        checkBoot(id, msg)
                         noteLockdown(msg.lockdown)
                         noteServerInfo(msg)
                         local wasSealed = state.sealed

@@ -103,6 +103,23 @@ local dlog = door:readFile("/airlock.log") or ""
 print("door logged the update:", dlog:find("installed, rebooting", 1, true) ~= nil)
 print("door still open after update:", door.rsOut.left == 15)
 
+local function boots(c)
+    local n = 0
+    for _ in (c:readFile("/airlock.log") or ""):gmatch("boot ") do n = n + 1 end
+    return n
+end
+local doorBoots, sensorBoots = boots(door), boots(sensor)
+earth:reboot()
+w:run(45)
+print("door rebooted after the server restarted:", boots(door) == doorBoots + 1 and (door:readFile("/airlock.log") or ""):find("server restarted, rebooting", 1, true) ~= nil)
+print("sensor rebooted too:", boots(sensor) == sensorBoots + 1)
+w:run(60)
+print("no reboot loop:", boots(door) == doorBoots + 1 and boots(sensor) == sensorBoots + 1)
+print("door back open after following the restart:", door.rsOut.left == 15)
+door:reboot()
+w:run(20)
+print("a door that rebooted by itself does not reboot again:", boots(door) == doorBoots + 2)
+
 S.errors(earth, "earth")
 S.errors(door, "door")
 S.errors(sensor, "sensor")
