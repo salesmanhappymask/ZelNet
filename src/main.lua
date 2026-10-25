@@ -126,9 +126,8 @@ function M.updateCommand(url)
     end
     local cfg = M.loadConfig()
     if cfg and cfg.role == "satellite" then
-        say("Satellites run Main's version and update from Main by themselves.", colors.yellow)
-        say("Update Main (" .. tostring(cfg.mainRealm) .. ") and this server follows within minutes.")
-        return
+        say("Satellites normally take updates from Main (" .. tostring(cfg.mainRealm) .. ").", colors.yellow)
+        say("Downloading straight from the repo anyway. Update Main to the same build too, or Main puts its own build back once it can reach this server.")
     end
     local opts = cfg or {}
     if url then opts = { updateUrl = url } end

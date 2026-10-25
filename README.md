@@ -142,7 +142,7 @@ Main decides the version for the whole network. Update Main and everything follo
 * On the Main console open **Update network**, then **Download from the repo**, then **Install and update the network**. Satellites download it over the backbone, install it and reboot by themselves, then pass it to their own routers and clients. Reboot Main once the satellites show the new release.
 * `zelnet update` in Main's shell does the same after Main reboots.
 * Anything that was switched off, out of range or failed to update is brought up to date as soon as it reports in. Satellites report to Main every few minutes, and devices check with their server every two minutes.
-* Satellites always follow Main, so they have no repo download of their own.
+* Satellites follow Main. When Main cannot reach a satellite (a bridge is down, for example), update it by itself: on its console open **Update**, then **Download from the repo**, or run `zelnet update` in its shell. Then reboot it. Update Main to the same build as well, or Main puts its own build back once it reaches the satellite again.
 
 **Releases.** Every build has a release number such as `r28`. It shows on each computer as it starts, in `zelnet version`, and on the console. On Main, **Update network, Network versions** lists every server and device in every realm with its release, marked current, behind or "on reboot" while it waits to restart. The event log notes each update, for example `MARS router outpost updated to r28`.
 * Every build carries a build id (for example `1.0.0+29d058ec`) that changes with every change to the code, so any new commit to `dist/zelnet` counts as an update even when the version number stays the same.

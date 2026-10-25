@@ -2362,6 +2362,7 @@ function Console:updatePage()
             items[#items + 1] = { label = "Send a program file", hint = "from disk", value = "file" }
         else
             items[#items + 1] = { label = "Update status", value = "status" }
+            if okU and up then items[#items + 1] = { label = "Download from the repo", hint = "when Main cannot reach it", value = "repo" } end
         end
         local choice = self:choose(isMain and "Update Network" or "Update", "This server runs ZelNet " .. version.label() .. " (" .. version.full() .. ")", items)
         if not choice then return nil end
@@ -2476,6 +2477,7 @@ function Console:repoUpdate(up)
     local isMain = self.cfg.role == "main"
     local intro = "The repo has ZelNet " .. got.label .. " (" .. util.fmtBytes(got.size) .. "). The network runs " .. got.currentLabel .. "."
     if got.same then intro = intro .. " They are the same build." end
+    if not isMain then intro = intro .. " Update Main to the same build as well, or Main puts its own build back once it can reach this server." end
     local items = {}
     if isMain then items[#items + 1] = { label = "Install and update the network", value = "network" } end
     if not isMain then items[#items + 1] = { label = "Install on this server only", value = "local" } end
