@@ -1410,9 +1410,40 @@ function Console:network()
                 rows = function() return self:networkRows(choice, srv) end,
                 interval = 2,
                 empty = "Nothing to show.",
+                onSelect = choice == "realms" and function(row) return self:realmMenu(row.realm) end or nil,
             })
         end
     end
+end
+
+function Console:realmMenu(r)
+    if type(r) ~= "table" or r.realm == self.cfg.realm then return nil end
+    local srv = self.ctx.server
+    local lines = {
+        "Realm " .. r.realm .. (r.main and " (Main)" or ""),
+        r.reachable and ("Reachable, metric " .. tostring(r.metric)) or "Unreachable",
+        "Release " .. tostring(r.prog or "unknown"),
+    }
+    if self.cfg.role ~= "main" then
+        self:say("Realm " .. r.realm, lines)
+        return nil
+    end
+    local choice = self:choose("Realm " .. r.realm, r.reachable and "reachable" or "unreachable", {
+        { label = "Details", value = "details" },
+        { label = "Remove realm", hint = "forget it everywhere", value = "remove", color = self.surf.c.bad },
+    })
+    if choice == "details" then
+        self:say("Realm " .. r.realm, lines)
+    elseif choice == "remove" then
+        if r.reachable then
+            return self:result("Remove Realm", false, r.realm .. " is still reachable. Shut its server down or remove the bridge to it first; a running server registers again within minutes.")
+        end
+        if not ui.confirm(self.surf, "Remove Realm", "Forget " .. r.realm .. " on every server? Its accounts, its entry in the versions list and any bridge to it from here are removed. If its server starts again later it registers again.", { yes = "Remove", danger = true }) then return nil end
+        local ok, err = self:call(srv, "forgetRealm", r.realm)
+        self:audit("realm_remove", r.realm, ok and nil or err, ok)
+        self:result("Remove Realm", ok, err, r.realm .. " is removed. The other servers drop it on their next directory update.")
+    end
+    return nil
 end
 
 function Console:networkRows(kind, srv, status, realms)
@@ -1426,6 +1457,7 @@ function Console:networkRows(kind, srv, status, realms)
                 text = r.realm .. (r.main and " Main" or "") .. (r.prog and (" v" .. tostring(r.prog)) or ""),
                 right = here and "this server" or (r.reachable and ("metric " .. tostring(r.metric)) or "unreachable"),
                 color = (here or r.reachable) and c.ok or c.bad,
+                realm = r,
             }
         end
     elseif kind == "routes" then

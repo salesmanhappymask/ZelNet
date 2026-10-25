@@ -435,6 +435,11 @@ end
 function Directory:forgetRealm(realm)
     if not self.isMain or realm == self.realm or not self.realms[realm] then return false end
     self.realms[realm] = nil
+    local gone = {}
+    for u, r in pairs(self.users) do
+        if r == realm then gone[#gone + 1] = u end
+    end
+    for _, u in ipairs(gone) do self.users[u] = nil end
     self:changed()
     return true
 end

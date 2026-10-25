@@ -425,6 +425,27 @@ t.case("provisioning devices and satellites", function()
     t.eq(srv.reg:get("relay1"), nil)
 end)
 
+t.case("main removes an unreachable realm and refuses a reachable one", function()
+    local srv = fresh()
+    assert(srv:provision("satellite", "mars"))
+    srv.dir.users.alice = "MARS"
+    srv.dir.users.bob = "EARTH"
+    srv.realmVersions.MARS = { prog = "x", t = 0, devices = {} }
+    srv.bb.routes.MARS = { realm = "MARS", metric = 2, via = "bridge:MARS" }
+    local ok, err = srv:forgetRealm("MARS")
+    t.eq(ok, nil)
+    t.ok(tostring(err):find("still reachable", 1, true), tostring(err))
+    srv.bb.routes.MARS.metric = 16
+    t.ok(srv:forgetRealm("mars"))
+    t.eq(srv.dir.realms.MARS, nil)
+    t.eq(srv.dir.users.alice, nil)
+    t.eq(srv.dir.users.bob, "EARTH")
+    t.eq(srv.realmVersions.MARS, nil)
+    for _, r in ipairs(srv:realms()) do t.ok(r.realm ~= "MARS", "MARS is still listed") end
+    t.eq(select(2, srv:forgetRealm("EARTH")), "that is this server's own realm")
+    t.eq(select(2, srv:forgetRealm("VENUS")), "no realm called VENUS")
+end)
+
 t.case("end to end with a real device node over a modem", function()
     fs.delete("/.zelnet")
     kit.reset()

@@ -148,6 +148,8 @@ Main decides the version for the whole network. Update Main and everything follo
 
 **Releases.** Every build has a release number such as `r28`. It shows on each computer as it starts, in `zelnet version`, and on the console. On Main, **Update network, Network versions** lists every server and device in every realm with its release, marked current, behind or "on reboot" while it waits to restart. The event log notes each update, for example `MARS router outpost updated to r28`.
 * Every build carries a build id (for example `1.0.0+29d058ec`) that changes with every change to the code, so any new commit to `dist/zelnet` counts as an update even when the version number stays the same.
+**Removing a realm.** On Main open **Network**, **Realms**, select the realm and choose **Remove realm**. Main forgets it, its accounts and its line in the versions list, removes any bridge from Main to it, and the other servers drop it on their next directory update. Only an unreachable realm can be removed: shut its server down or remove the bridge to it first, because a running satellite registers again within minutes.
+
 * To update from another branch or fork, set `updateUrl` in `/.zelnet/config` or run `zelnet update <url>`.
 
 ## First in-game test

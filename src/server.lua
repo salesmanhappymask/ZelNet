@@ -1179,6 +1179,25 @@ function Server:removeDevice(name)
     return self.reg:remove(name)
 end
 
+function Server:forgetRealm(realm)
+    local r = util.normRealm(realm)
+    if not self.isMain then return nil, "only Main can remove a realm" end
+    if not r then return nil, "that is not a realm name" end
+    if r == self.realm then return nil, "that is this server's own realm" end
+    if self.bb:metricTo(r) < backbone.INF then
+        return nil, r .. " is still reachable. Shut its server down or remove the bridge to it first; a running server registers again within minutes."
+    end
+    local had = self.dir:forgetRealm(r)
+    local versions = self.realmVersions[r] ~= nil
+    self.realmVersions[r] = nil
+    local route = self.bb.routes[r] ~= nil
+    self.bb.routes[r] = nil
+    local bridged = self.bb:removeBridge(r)
+    if not (had or versions or route or bridged) then return nil, "no realm called " .. r end
+    self.log.warn("realm removed: " .. r .. (bridged and " (and the bridge to it)" or ""))
+    return true, bridged
+end
+
 function Server:realms()
     local out = {}
     local seen = {}
