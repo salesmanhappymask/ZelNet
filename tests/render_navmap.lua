@@ -53,3 +53,20 @@ shot("navmap_contain", all, { { station = "Athena", cause = "Athena2-B", age = 8
 shot("navmap9_breach", breach, {}, 0, 9)
 shot("navmap9_lockdown", nodes({}, function(r) if r.role == "door" then r.sealed = true end end), { { station = "Athena", cause = "lockdown", hold = true, manual = true, age = 75 } }, 1, 9)
 shot("navmap9_settling", nodes({ ["Athena2-B"] = true }), {}, 0, 9, { zones = { Athena2 = "holding" }, commons = { north = "pending" } })
+local mixed = nodes({ ["Athena7-C"] = true }, function(r)
+    local set = {
+        ["Athena7-A"] = { sealed = true, why = "hallway Athena7: no oxygen" },
+        ["Athena7-B"] = { sealed = true, why = "hallway Athena7: no oxygen" },
+        ["Athena2-B"] = { sealed = true, why = "retry in 40s (lost air after opening)" },
+        ["Athena5-B"] = { sealed = true, why = "waiting: room North settling" },
+        ["Athena-A"] = { sealed = true, locked = true, why = "locked from the console" },
+        ["Athena3-B"] = { sealed = true, manual = "seal", why = "manual seal" },
+        ["Athena8-A"] = { online = false },
+    }
+    for k, v in pairs(set[r.name] or {}) do r[k] = v end
+end)
+shot("navmap9_doors_a", mixed, {}, 0, 9, { zones = { Athena7 = "lost" }, commons = {} })
+shot("navmap9_doors_b", mixed, {}, 1, 9, { zones = { Athena7 = "lost" }, commons = {} })
+shot("navmap6_doors", mixed, {}, 1, 6, { zones = { Athena7 = "lost" }, commons = {} })
+local locked = nodes({}, function(r) if r.role == "door" then r.sealed = true r.lockdown = true r.why = "station lockdown" end end)
+shot("navmap9_lockdown2", locked, { { station = "Athena", cause = "lockdown", hold = true, manual = true, age = 30 } }, 1, 9)

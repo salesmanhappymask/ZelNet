@@ -175,12 +175,78 @@ local function zoneCenter(zone)
     return math.floor((best[1] + best[3]) / 2), math.floor((best[2] + best[4]) / 2)
 end
 
-local function doorState(rec)
-    if not rec then return "missing" end
-    if not rec.online then return "offline" end
-    if rec.locked then return "locked" end
-    if rec.sealed then return "sealed" end
-    return "open"
+M.DOOR_STYLE = {
+    lockdown = { on = colors.red, off = colors.black, legend = "door locked down", rank = 1 },
+    breach = { on = colors.red, off = colors.orange, legend = "door sealed: no air", rank = 2 },
+    locked = { on = colors.magenta, off = colors.black, legend = "door locked", rank = 3 },
+    manual = { on = colors.purple, off = colors.black, legend = "door manual seal", rank = 4 },
+    retry = { on = colors.lightBlue, off = colors.blue, legend = "door retrying", rank = 5 },
+    sealing = { on = colors.blue, off = colors.black, legend = "door sealing (normal)", rank = 6 },
+    sealed = { on = colors.yellow, off = colors.black, legend = "door sealed", rank = 7 },
+    offline = { on = colors.gray, off = colors.gray, legend = "door offline", rank = 8 },
+    missing = { on = colors.gray, off = colors.gray, rank = 9 },
+}
+
+function M.doorInfo(rec)
+    if not rec then return "missing", "NO PC" end
+    if not rec.online then return "offline", "OFFLINE" end
+    if rec.lockdown then return "lockdown", "LOCKDOWN" end
+    if rec.locked then return "locked", "LOCKED" end
+    if not rec.sealed then return "open", "OPEN" end
+    if rec.manual == "seal" then return "manual", "MANUAL" end
+    local why = tostring(rec.why or "")
+    if why:find("no oxygen", 1, true) then return "breach", "NO AIR" end
+    local n = why:match("retry in (%d+)s")
+    if n then return "retry", "RETRY " .. n .. "s" end
+    if why:find("waiting", 1, true) or why:find("settling", 1, true) then return "sealing", "SEALING" end
+    return "sealed", "SEALED"
+end
+
+function M.doorCode(name)
+    local num, letter = tostring(name):match("^%a+(%d*)%-(%a)$")
+    if not letter then return tostring(name) end
+    return (num ~= "" and num or "1") .. letter:upper()
+end
+
+local doorLines
+
+function M.doorLines()
+    if doorLines then return doorLines end
+    local g = M.geometry()
+    local n = g.n
+    local commonOf, zoneOf = {}, {}
+    for _, c in ipairs(M.COMMONS) do for _, d in ipairs(c.doors) do commonOf[d] = c.id end end
+    for i, z in ipairs(M.ZONES) do zoneOf[z.group] = "z" .. i end
+    doorLines = {}
+    for name in pairs(M.DOORS) do
+        local zid, cid = zoneOf[name:match("^(.-)%-")], commonOf[name]
+        local cells = {}
+        for z = -n, n do
+            for x = -n, n do
+                if g.area[z + n + 1][x + n + 1] == zid then
+                    for _, d in ipairs({ { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } }) do
+                        local row = g.area[z + d[2] + n + 1]
+                        if row and row[x + d[1] + n + 1] == cid then
+                            cells[#cells + 1] = { x, z }
+                            break
+                        end
+                    end
+                end
+            end
+        end
+        if #cells > 0 then
+            local horizontal = cells[1][2] == cells[#cells][2]
+            local a, b = cells[1], cells[#cells]
+            local ends = horizontal and { { a[1] - 1, a[2] }, { b[1] + 1, b[2] } } or { { a[1], a[2] - 1 }, { b[1], b[2] + 1 } }
+            for _, e in ipairs(ends) do
+                local row = g.cells[e[2] + n + 1]
+                if row and row[e[1] + n + 1] == 2 then cells[#cells + 1] = e end
+            end
+            local mid = cells[math.ceil(#cells / 2)]
+            doorLines[name] = { cells = cells, horizontal = horizontal, mid = { (a[1] + b[1]) / 2, (a[2] + b[2]) / 2 } }
+        end
+    end
+    return doorLines
 end
 
 local ENGINE = { lost = "breach", pending = "settling", holding = "ok" }
@@ -244,11 +310,23 @@ function M.status(list, contain, areas)
             st.unknown = st.unknown + 1
         end
     end
+    st.notes = {}
     for name in pairs(M.DOORS) do
-        local ds = doorState(by[name:lower()])
-        st.doors[name] = ds
-        st.counts[ds] = st.counts[ds] + 1
+        local rec = by[name:lower()]
+        local cat, label = M.doorInfo(rec)
+        st.doors[name] = cat
+        st.doorLabels = st.doorLabels or {}
+        st.doorLabels[name] = label
+        st.counts[cat] = (st.counts[cat] or 0) + 1
+        if cat ~= "open" and cat ~= "missing" then
+            st.notes[#st.notes + 1] = { name = name, code = M.doorCode(name), cat = cat, label = label, why = rec and rec.why or nil }
+        end
     end
+    table.sort(st.notes, function(a, b)
+        local ra, rb = M.DOOR_STYLE[a.cat].rank, M.DOOR_STYLE[b.cat].rank
+        if ra ~= rb then return ra < rb end
+        return a.name < b.name
+    end)
     for _, zone in ipairs(M.ZONES) do
         for _, L in ipairs({ "A", "B", "C" }) do
             local nm = zone.group .. "-" .. L
@@ -399,10 +477,35 @@ function M.drawSide(surf, sideW, st, info, pal, frame)
     end
     y = y + 1
     title("DOORS")
-    line("Open", tostring(st.counts.open), colors.white)
-    line("Sealed", tostring(st.counts.sealed), colors.yellow)
-    line("Locked", tostring(st.counts.locked), colors.magenta)
-    line("Offline", tostring(st.counts.offline + st.counts.missing), (st.counts.offline + st.counts.missing) > 0 and colors.orange or colors.lightGray)
+    line("Open", tostring(st.counts.open or 0) .. " of " .. tostring(#st.notes + (st.counts.open or 0) + (st.counts.missing or 0)), colors.white)
+    local legendItems = M.legendItems(pal)
+    local legendTop = h - #legendItems
+    local room = math.max(0, legendTop - y - 9)
+    if #st.notes <= room then
+        for _, note in ipairs(st.notes) do
+            local style = M.DOOR_STYLE[note.cat]
+            local text = string.format("%-3s %-9s", note.code, note.label)
+            if note.why and sideW > 26 then text = text .. " " .. note.why end
+            surf:field(2, y, sideW - 2, text, style.on == colors.gray and colors.lightGray or style.on, pal.side)
+            y = y + 1
+        end
+    else
+        local counts, order = {}, {}
+        for _, note in ipairs(st.notes) do
+            if not counts[note.cat] then
+                counts[note.cat] = 0
+                order[#order + 1] = note
+            end
+            counts[note.cat] = counts[note.cat] + 1
+        end
+        for i, note in ipairs(order) do
+            if i > math.max(1, room) then break end
+            local style = M.DOOR_STYLE[note.cat]
+            local word = note.cat == "retry" and "RETRYING" or note.label
+            surf:field(2, y, sideW - 2, string.format("%-9s %d door%s", word, counts[note.cat], counts[note.cat] == 1 and "" or "s"), style.on == colors.gray and colors.lightGray or style.on, pal.side)
+            y = y + 1
+        end
+    end
     y = y + 1
     title("LOCKDOWN")
     if st.contain then
@@ -413,7 +516,6 @@ function M.drawSide(surf, sideW, st, info, pal, frame)
         line("Status", "clear", colors.lime)
     end
     y = y + 1
-    local legendTop = h - 7
     title("ALERTS")
     local shown = 0
     for _, a in ipairs(st.alerts) do
@@ -429,11 +531,7 @@ function M.drawSide(surf, sideW, st, info, pal, frame)
         surf:field(2, y, sideW - 2, "none", colors.lime, pal.side)
     end
     if legendTop > y then
-        local items = {
-            { pal.common, "area sealed" }, { pal.breach, "no oxygen" }, { colors.cyan, "settling" }, { colors.purple, "no data" },
-            { colors.white, "door open" }, { colors.yellow, "door sealed" }, { colors.magenta, "door locked" },
-        }
-        for i, it in ipairs(items) do
+        for i, it in ipairs(legendItems) do
             local yy = legendTop + i
             if yy <= h then
                 surf:rect(2, yy, 2, 1, it[1])
@@ -441,6 +539,17 @@ function M.drawSide(surf, sideW, st, info, pal, frame)
             end
         end
     end
+end
+
+function M.legendItems(pal)
+    local items = {
+        { pal.common, "area sealed" }, { pal.breach, "no oxygen" }, { colors.cyan, "settling" }, { colors.purple, "no data" },
+        { colors.white, "door open" },
+    }
+    for _, key in ipairs({ "sealing", "retry", "breach", "manual", "locked", "lockdown", "sealed", "offline" }) do
+        items[#items + 1] = { M.DOOR_STYLE[key].on, M.DOOR_STYLE[key].legend }
+    end
+    return items
 end
 
 function M.drawMap(surf, x0, mapW, st, lay, pal, frame)
@@ -463,10 +572,23 @@ function M.drawMap(surf, x0, mapW, st, lay, pal, frame)
             surf.fb[(row - 1) * surf.w + x0 + col - 1] = bg
         end
     end
+    local lines = M.doorLines()
+    for name, ln in pairs(lines) do
+        local cat = st.doors[name]
+        local style = M.DOOR_STYLE[cat]
+        if style then
+            local bg = frame == 1 and style.on or style.off
+            for _, c in ipairs(ln.cells) do
+                local col, row = M.toCell(c[1], c[2], mapW, h)
+                surf.fb[(row - 1) * surf.w + x0 + col - 1] = bg
+            end
+        end
+    end
     for name, pos in pairs(M.DOORS) do
         local col, row = M.toCell(pos[1], pos[2], mapW, h)
         local ds = st.doors[name]
-        local bg = pal[ds] or pal.missing
+        local style = M.DOOR_STYLE[ds]
+        local bg = style and style.on or colors.white
         local ch = ds == "missing" and "?" or (ds == "offline" and "x" or " ")
         surf:text(x0 + col - 1, row, ch, colors.white, bg)
     end
@@ -487,6 +609,41 @@ function M.drawMap(surf, x0, mapW, st, lay, pal, frame)
         surf:text(x0 + col - 1 - math.floor(#text / 2), row, text, fg, bg)
         if s == "breach" and frame == 1 then
             surf:text(x0 + col - 1 - 3, row + 2, "BREACH", colors.white, bg)
+        end
+    end
+    local taken = {}
+    local function free(left, top, w)
+        if left < x0 or left + w - 1 > x0 + mapW - 1 or top < 1 or top > h then return false end
+        for x = left - 1, left + w do
+            if taken[top * 1000 + x] then return false end
+        end
+        return true
+    end
+    local function take(left, top, w)
+        for x = left, left + w - 1 do taken[top * 1000 + x] = true end
+    end
+    for _, note in ipairs(st.notes) do
+        local ln = lines[note.name]
+        local style = M.DOOR_STYLE[note.cat]
+        if ln and style and note.cat ~= "missing" then
+            local text = " " .. note.label .. " "
+            local w = #text
+            local col, row = M.toCell(ln.mid[1], ln.mid[2], mapW, h)
+            local cx, cy = x0 + col - 1, row
+            local spots
+            if ln.horizontal then
+                spots = { { cx + 4, cy }, { cx - w - 3, cy }, { cx - math.floor(w / 2), cy - 2 }, { cx - math.floor(w / 2), cy + 2 } }
+            else
+                spots = { { cx - math.floor(w / 2), cy - 3 }, { cx - math.floor(w / 2), cy + 3 }, { cx + 4, cy }, { cx - w - 3, cy } }
+            end
+            for _, sp in ipairs(spots) do
+                if free(sp[1], sp[2], w) then
+                    take(sp[1], sp[2], w)
+                    local light = style.on == colors.yellow or style.on == colors.lightBlue or style.on == colors.orange
+                    surf:field(sp[1], sp[2], w, text, light and colors.black or colors.white, style.on, "center")
+                    break
+                end
+            end
         end
     end
     for i, zone in ipairs(M.ZONES) do

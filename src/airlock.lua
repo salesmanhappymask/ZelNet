@@ -994,6 +994,7 @@ function Airlock:applyPolicy(rec, announce)
     local changed = (rec.sealed ~= desired) or (rec.lockSync ~= lockFlag)
     if rec.sealed ~= desired then self:changed(rec) end
     rec.sealed = desired
+    if rec.role == "door" or rec.role == "security" then rec.why = self.why end
     if announce and changed then
         self:sendCommand(rec)
         rec.lockSync = lockFlag
@@ -1256,7 +1257,11 @@ end
 function Airlock:list()
     local now = compat.now()
     local out = {}
-    for _, r in pairs(self.nodes) do out[#out + 1] = copyRec(r, now) end
+    for _, r in pairs(self.nodes) do
+        local c = copyRec(r, now)
+        c.lockdown = self:lockdownOf(r)
+        out[#out + 1] = c
+    end
     table.sort(out, function(a, b)
         if a.group ~= b.group then return tostring(a.group) < tostring(b.group) end
         return memberKey(a) < memberKey(b)
