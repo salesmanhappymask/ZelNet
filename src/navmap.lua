@@ -220,12 +220,17 @@ function M.status(list, contain, areas)
     end
     for i, c in ipairs(M.COMMONS) do
         local any, low, live = false, false, false
-        for _, name in ipairs(c.doors) do
-            local d = by[name:lower()]
-            if d and d.oxygenated ~= nil then
-                any = true
-                if d.oxygenated == false then low = true end
-                if d.online then live = true end
+        local rs = by[c.name:lower()]
+        if rs and rs.role == "room" and rs.oxygenated ~= nil then
+            any, low, live = true, rs.oxygenated == false, rs.online and true or false
+        else
+            for _, name in ipairs(c.doors) do
+                local d = by[name:lower()]
+                if d and d.oxygenated ~= nil then
+                    any = true
+                    if d.oxygenated == false then low = true end
+                    if d.online then live = true end
+                end
             end
         end
         local s = low and "breach" or (not any and "nodata") or (not live and "offline") or "ok"

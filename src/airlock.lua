@@ -62,7 +62,26 @@ function M.stationOf(group)
     return base
 end
 
+function M.roomKey(name)
+    if type(name) ~= "string" then return nil end
+    local k = util.trim(name):lower()
+    if k == "" then return nil end
+    return k
+end
+
 function M.normalize(rec)
+    if rec.role == "room" then
+        rec.room = rec.room or rec.name
+        rec.roomKey = M.roomKey(rec.room)
+        rec.group = "room:" .. tostring(rec.roomKey)
+        rec.suffix = nil
+        return rec
+    end
+    if rec.role == "security" then
+        rec.group = "security:" .. tostring(rec.name)
+        rec.suffix = nil
+        return rec
+    end
     local g, suf = M.groupInfo(rec.name)
     rec.group = g
     rec.suffix = suf
@@ -72,9 +91,24 @@ function M.normalize(rec)
     return rec
 end
 
+local function isHall(r)
+    return r.role == "door" or r.role == "sensor"
+end
+
 local function cleanName(s)
     if type(s) ~= "string" then return "" end
     return util.trim(util.sanitize(s)):sub(1, M.NAME_MAX)
+end
+
+local function cleanRooms(t)
+    if type(t) ~= "table" then return nil end
+    local out = {}
+    for i = 1, 2 do
+        local v = cleanName(t[i])
+        if v ~= "" then out[#out + 1] = v end
+    end
+    if #out == 0 then return nil end
+    return out
 end
 
 local function memberKey(r)
@@ -145,7 +179,7 @@ function Airlock:flushLog()
 end
 
 function Airlock:lockdownOf(rec)
-    local c = self.contain[M.stationOf(rec.group)]
+    local c = self.contain[self:stationOfRec(rec)]
     return (c and (c.manual or c.hold)) and true or nil
 end
 
@@ -211,7 +245,7 @@ function Airlock:maybeOffer(rec, msg)
         end
         return false
     end
-    if self.contain[M.stationOf(rec.group)] then return false end
+    if self.contain[self:stationOfRec(rec)] then return false end
     if u and u.id ~= rec.id and now - u.at < M.UPDATE_STALL then return false end
     if rec.offerAt and now - rec.offerAt < M.OFFER_GAP then return false end
     rec.offerAt = now
@@ -276,20 +310,21 @@ function Airlock:logBundle(header)
         add(station .. ": " .. table.concat(parts, ", "))
     end
     add("")
-    add("== airlocks (name id online o2 sealed lock interlock manual ver via age backoff why)")
+    add("== airlocks (name id role room online o2 sealed lock interlock manual ver via age backoff why)")
     local list = {}
     for _, r in pairs(self.nodes) do list[#list + 1] = r end
     table.sort(list, function(a, b) return tostring(a.name) < tostring(b.name) end)
     for _, r in ipairs(list) do
         local why = ""
-        if r.role ~= "sensor" then
+        if r.role ~= "sensor" and r.role ~= "room" then
             local ps = self.pendingSettle
             self:desired(r)
             self.pendingSettle = ps
             why = self.why or ""
         end
-        add(string.format("%-11s %4s %-3s o2=%-5s sealed=%-5s lock=%-5s il=%-5s man=%-6s ver=%-12s via=%s age=%s bo=%s | %s",
-            tostring(r.name), tostring(r.id), r.online and "on" or "OFF", tostring(r.oxygenated), tostring(r.sealed), tostring(r.locked == true),
+        local room = r.role == "security" and table.concat(r.rooms or {}, "/") or (r.room or (self:roomKeyOf(r) and ("(" .. self:roomKeyOf(r) .. ")")) or "-")
+        add(string.format("%-11s %4s %-8s room=%-9s %-3s o2=%-5s sealed=%-5s lock=%-5s il=%-5s man=%-6s ver=%-12s via=%s age=%s bo=%s | %s",
+            tostring(r.name), tostring(r.id), tostring(r.role), room, r.online and "on" or "OFF", tostring(r.oxygenated), tostring(r.sealed), tostring(r.locked == true),
             tostring(r.interlock == true), tostring(r.manual or "-"), tostring(r.ver or "?"), tostring(r.via or "direct"),
             r.lastSeen and string.format("%.0fs", now - r.lastSeen) or "?",
             r.backoffUntil and r.backoffUntil > now and string.format("%.0fs", r.backoffUntil - now) or "-", why))
@@ -466,6 +501,8 @@ function Airlock:load()
                     online = r.online ~= false, seen = tonumber(r.seen), lastSeen = now,
                     via = type(r.via) == "string" and r.via or nil, viaAt = type(r.via) == "string" and now or nil,
                     ver = type(r.ver) == "string" and r.ver or nil,
+                    room = type(r.room) == "string" and cleanName(r.room) ~= "" and cleanName(r.room) or nil,
+                    rooms = cleanRooms(r.rooms), roomSet = r.roomSet == true or nil,
                 }
                 if type(rec.oxygenated) ~= "boolean" then rec.oxygenated = nil end
                 if rec.oxygenated == true then rec.oxyAt = now - M.SETTLE end
@@ -499,7 +536,7 @@ function Airlock:snapshot()
         out[key] = {
             id = r.id, name = r.name, role = r.role, oxygenated = r.oxygenated, locked = r.locked,
             manual = r.manual, sealed = r.sealed, lockSync = r.lockSync, named = r.named, online = r.online, seen = r.seen,
-            via = r.via, ver = r.ver,
+            via = r.via, ver = r.ver, room = r.room, rooms = r.rooms, roomSet = r.roomSet,
         }
     end
     local contain = {}
@@ -528,9 +565,85 @@ end
 function Airlock:groupSensor(group)
     if not group then return nil end
     for _, r in pairs(self.nodes) do
-        if r.group == group and r.suffix == "C" then return r end
+        if r.group == group and r.suffix == "C" and r.role == "sensor" then return r end
     end
     return nil
+end
+
+function Airlock:roomKeyOf(r)
+    if r.role == "room" then return r.roomKey end
+    if r.role ~= "door" then return nil end
+    if type(r.room) == "string" and r.room ~= "" then return M.roomKey(r.room) end
+    local l = self:layout(M.stationOf(r.group))
+    return l and type(r.name) == "string" and l[r.name:lower()] or nil
+end
+
+function Airlock:topology()
+    if self.topo then return self.topo end
+    local t = { roomStation = {}, station = {}, roomNames = {} }
+    for _, r in pairs(self.nodes) do
+        if r.role == "door" then
+            local k = self:roomKeyOf(r)
+            if k and not t.roomStation[k] then t.roomStation[k] = M.stationOf(r.group) end
+        end
+    end
+    local okN, nav = pcall(need, "navmap")
+    if okN and type(nav) == "table" and type(nav.COMMONS) == "table" then
+        for _, c in ipairs(nav.COMMONS) do
+            if not t.roomStation[c.id] then t.roomStation[c.id] = nav.STATION end
+        end
+    end
+    local function roomStation(k)
+        if not k then return nil end
+        return t.roomStation[k] or ("Room " .. k)
+    end
+    for key, r in pairs(self.nodes) do
+        local st
+        if r.role == "room" then
+            st = roomStation(r.roomKey)
+        elseif r.role == "security" then
+            for _, name in ipairs(r.rooms or {}) do
+                st = st or (t.roomStation[M.roomKey(name)])
+            end
+            st = st or M.stationOf(r.name)
+        else
+            st = M.stationOf(r.group)
+        end
+        t.station[key] = st
+        if r.role == "room" and r.room then t.roomNames[r.roomKey] = r.room end
+        if r.role == "door" and type(r.room) == "string" and r.room ~= "" then
+            local k = M.roomKey(r.room)
+            t.roomNames[k] = t.roomNames[k] or r.room
+        end
+    end
+    self.topo = t
+    return t
+end
+
+function Airlock:stationOfRec(r)
+    local st = self:topology().station[tostring(r.id)]
+    if st then return st end
+    if r.role == "room" then return "Room " .. tostring(r.roomKey) end
+    return M.stationOf(r.group)
+end
+
+function Airlock:roomNames()
+    local out = {}
+    for _, name in pairs(self:topology().roomNames) do out[#out + 1] = name end
+    local okN, nav = pcall(need, "navmap")
+    if okN and type(nav) == "table" and type(nav.COMMONS) == "table" then
+        local have = {}
+        for _, n in ipairs(out) do have[n:lower()] = true end
+        for _, c in ipairs(nav.COMMONS) do
+            if not have[c.id] then out[#out + 1] = c.name end
+        end
+    end
+    table.sort(out, function(a, b) return a:lower() < b:lower() end)
+    return out
+end
+
+function Airlock:roomLabel(key)
+    return self:topology().roomNames[key] or key
 end
 
 function Airlock:stable(r, now)
@@ -554,29 +667,46 @@ function Airlock:layout(station)
     return l or nil
 end
 
-function Airlock:farArea(rec)
-    local station = M.stationOf(rec.group)
-    local l = self:layout(station)
-    local id = l and type(rec.name) == "string" and l[rec.name:lower()]
-    if not id then return { members = { rec }, doors = { rec } } end
-    local area = { members = {}, doors = {}, key = station .. ":area:" .. id }
-    for _, r in ipairs(self:members(station)) do
-        if r.role ~= "sensor" and type(r.name) == "string" and l[r.name:lower()] == id then
-            area.members[#area.members + 1] = r
+function Airlock:roomArea(key)
+    local station = self:topology().roomStation[key] or ("Room " .. key)
+    local area = { members = {}, doors = {}, key = station .. ":area:" .. key, label = "room " .. self:roomLabel(key) }
+    local sensors, fallback = {}, {}
+    for _, r in pairs(self.nodes) do
+        if r.role == "room" and r.roomKey == key then
+            if r.online ~= false then sensors[#sensors + 1] = r end
+        elseif r.role == "door" and self:roomKeyOf(r) == key then
             area.doors[#area.doors + 1] = r
+            fallback[#fallback + 1] = r
+            local il = r.ilRoom
+            if il == nil and r.ilHall == nil then il = false end
+            if il and r.online ~= false and r.interlockAt and compat.now() - r.interlockAt >= M.LOSS_CONFIRM then area.interlocked = true end
+        elseif r.role == "security" then
+            for _, name in ipairs(r.rooms or {}) do
+                if M.roomKey(name) == key then area.doors[#area.doors + 1] = r end
+            end
         end
     end
+    area.members = #sensors > 0 and sensors or fallback
+    area.fromSensor = #sensors > 0
     return area
 end
 
+function Airlock:farArea(rec)
+    local key = self:roomKeyOf(rec)
+    if not key then return { members = { rec }, doors = { rec }, label = "far side" } end
+    return self:roomArea(key)
+end
+
 function Airlock:zoneArea(group)
-    local area = { members = {}, doors = {}, key = M.stationOf(group) .. ":zone:" .. tostring(group) }
+    local area = { members = {}, doors = {}, key = M.stationOf(group) .. ":zone:" .. tostring(group), label = "hallway " .. tostring(group) }
     for _, r in pairs(self.nodes) do
-        if r.group == group then
-            if r.suffix == "C" then area.members[#area.members + 1] = r
+        if r.group == group and isHall(r) then
+            if r.suffix == "C" and r.role == "sensor" then area.members[#area.members + 1] = r
             elseif r.role ~= "sensor" then
                 area.doors[#area.doors + 1] = r
-                if r.interlock and r.online ~= false and r.interlockAt and compat.now() - r.interlockAt >= M.LOSS_CONFIRM then area.interlocked = true end
+                local il = r.ilHall
+                if il == nil then il = r.interlock end
+                if il and r.online ~= false and r.interlockAt and compat.now() - r.interlockAt >= M.LOSS_CONFIRM then area.interlocked = true end
             end
         end
     end
@@ -611,49 +741,70 @@ function Airlock:desired(rec)
         self.why = why
         return v
     end
-    if rec.role == "sensor" then return out(false, "sensor") end
+    if rec.role == "sensor" or rec.role == "room" then return out(false, "sensor") end
     if rec.locked then return out(true, "locked from the console") end
     if rec.manual == "seal" then return out(true, "manual seal") end
     if rec.manual == "unseal" then return out(false, "manual unseal") end
     local now = compat.now()
     if rec.interlock and (rec.sealed or now - (rec.interlockAt or now) >= M.LOSS_CONFIRM) then
         self.pendingSettle = true
-        return out(true, "interlock: its -C sensor reads no oxygen")
+        local key = self:roomKeyOf(rec)
+        local what = (rec.ilRoom and key and ("room " .. self:roomLabel(key))) or (rec.ilHall and ("hallway " .. tostring(rec.group))) or "a sensor it listens to"
+        return out(true, what .. ": no oxygen")
     end
     if rec.interlock then self.pendingSettle = true end
-    local station = M.stationOf(rec.group)
+    local station = self:stationOfRec(rec)
     local c = self.contain[station]
     if c and c.manual then return out(true, "station lockdown") end
     if c and (c.hold or now - c.since < M.CONTAIN_MIN) then return out(true, "containment") end
-    local zone = self:areaState(self:zoneArea(rec.group), now)
-    local far = self:areaState(self:farArea(rec), now)
-    local sides = "zone " .. zone .. ", far side " .. far
-    if zone == "lost" then return out(true, "zone has no oxygen (" .. sides .. ")") end
-    if far == "lost" then return out(true, "far side has no oxygen (" .. sides .. ")") end
+    local areas = {}
+    if rec.role == "security" then
+        for _, name in ipairs(rec.rooms or {}) do
+            local k = M.roomKey(name)
+            if k then areas[#areas + 1] = self:roomArea(k) end
+        end
+    else
+        areas[1] = self:zoneArea(rec.group)
+        areas[2] = self:farArea(rec)
+    end
+    local states = {}
+    for i, a in ipairs(areas) do states[i] = self:areaState(a, now) end
+    for i, a in ipairs(areas) do
+        if states[i] == "lost" then return out(true, a.label .. ": no oxygen") end
+    end
+    local calm = true
+    local waitFor
+    for i, a in ipairs(areas) do
+        if states[i] ~= "holding" then
+            calm = false
+            waitFor = waitFor or a.label
+        end
+    end
     if rec.sealed ~= true then
-        if zone ~= "holding" or far ~= "holding" or (rec.openedAt and now - rec.openedAt < M.PROBE) then self.pendingSettle = true end
-        return out(false, "stays open (" .. sides .. ")")
+        if not calm or (rec.openedAt and now - rec.openedAt < M.PROBE) then self.pendingSettle = true end
+        return out(false, rec.role == "security" and "open" or "open: both sides hold air")
     end
-    if zone ~= "holding" or far ~= "holding" then
+    if not calm then
         self.pendingSettle = true
-        return out(true, "waiting to settle (" .. sides .. ")")
+        return out(true, "waiting: " .. waitFor .. " settling")
     end
+    if rec.role == "security" then return out(false, "open") end
     if rec.backoffUntil and now < rec.backoffUntil then
         self.pendingSettle = true
-        return out(true, "backing off " .. math.ceil(rec.backoffUntil - now) .. "s after a failed opening")
+        return out(true, "retry in " .. math.ceil(rec.backoffUntil - now) .. "s (lost air after opening)")
     end
     local last = self.lastOpen[station]
     if last and now - last < M.OPEN_GAP then
         self.pendingSettle = true
         return out(true, "waiting its turn to open")
     end
-    return out(false, "both sides hold oxygen")
+    return out(false, "open: both sides hold air")
 end
 
 function Airlock:members(station)
     local out = {}
     for _, r in pairs(self.nodes) do
-        if M.stationOf(r.group) == station then out[#out + 1] = r end
+        if self:stationOfRec(r) == station then out[#out + 1] = r end
     end
     table.sort(out, function(a, b) return tostring(a.name) < tostring(b.name) end)
     return out
@@ -661,14 +812,14 @@ end
 
 function Airlock:applyStation(station)
     for _, r in ipairs(self:members(station)) do
-        if r.role ~= "sensor" then self:applyPolicy(r, true) end
+        if r.role ~= "sensor" and r.role ~= "room" then self:applyPolicy(r, true) end
     end
     self:noteAreas(station)
 end
 
 function Airlock:announceStation(station, why)
     for _, r in ipairs(self:members(station)) do
-        if r.role ~= "sensor" then
+        if r.role ~= "sensor" and r.role ~= "room" then
             self:applyPolicy(r, false)
             r.lockSync = r.locked and true or false
         end
@@ -679,7 +830,7 @@ end
 
 function Airlock:startContainment(rec)
     if not self.containOn then return false end
-    local station = M.stationOf(rec.group)
+    local station = self:stationOfRec(rec)
     local now = compat.now()
     local c = self.contain[station]
     local trips = c and c.trips or {}
@@ -700,7 +851,7 @@ end
 function Airlock:stations()
     local seen, out = {}, {}
     for _, r in pairs(self.nodes) do
-        local st = M.stationOf(r.group)
+        local st = self:stationOfRec(r)
         if st ~= "" and not seen[st] then
             seen[st] = true
             out[#out + 1] = st
@@ -760,17 +911,45 @@ end
 
 function Airlock:areaStates(station)
     local now = compat.now()
-    local out = { zones = {}, commons = {} }
-    local l = self:layout(station)
+    local out = { zones = {}, commons = {}, sources = {} }
     for _, r in ipairs(self:members(station)) do
-        if r.group and out.zones[r.group] == nil then
+        if isHall(r) and r.group and out.zones[r.group] == nil then
             local z = self:zoneArea(r.group)
             out.zones[r.group] = #z.members > 0 and self:areaState(z, now) or false
         end
-        local key = l and r.role ~= "sensor" and type(r.name) == "string" and l[r.name:lower()]
-        if key and out.commons[key] == nil then out.commons[key] = self:areaState(self:farArea(r), now) end
+        local key = self:roomKeyOf(r)
+        if key and out.commons[key] == nil then
+            local a = self:roomArea(key)
+            out.commons[key] = #a.members > 0 and self:areaState(a, now) or false
+            out.sources[key] = a.fromSensor and "sensor" or "doors"
+        end
     end
     return out
+end
+
+function Airlock:setRoom(id, value, actor)
+    local rec, err = self:find(id)
+    if not rec then return nil, err end
+    if rec.role == "door" then
+        local v = cleanName(value)
+        rec.room = v ~= "" and v or nil
+    elseif rec.role == "security" then
+        rec.rooms = cleanRooms(type(value) == "table" and value or { value })
+    else
+        return nil, "Only doors and security doors open into rooms."
+    end
+    rec.roomSet = true
+    self.topo = nil
+    self:applyPolicy(rec, false)
+    self:sendCommand(rec, "room set from the console")
+    rec.lockSync = rec.locked and true or false
+    self:applyStation(self:stationOfRec(rec))
+    self:changed(rec, true)
+    self:save()
+    local text = rec.role == "door" and tostring(rec.room or "none") or table.concat(rec.rooms or {}, " / ")
+    self:event("room of " .. tostring(rec.name) .. " set to " .. text .. " by " .. tostring(actor or "console"))
+    self:audit(actor or "console", "airlock_room", rec.name, text, true)
+    return true
 end
 
 function Airlock:containment()
@@ -787,7 +966,11 @@ function Airlock:sendCommand(rec, why)
     self.counters.commands = self.counters.commands + 1
     local action = rec.sealed and "seal" or "unseal"
     self:event("cmd " .. tostring(rec.name) .. " " .. action .. (rec.locked and " locked" or "") .. (self:lockdownOf(rec) and " lockdown" or "") .. " (" .. tostring(why or self.why or "?") .. ")")
-    self:rsend(rec.id, { type = "alk_cmd", action = action, locked = rec.locked and true or false, force = rec.manual == "unseal" or nil, lockdown = self:lockdownOf(rec) })
+    self:rsend(rec.id, {
+        type = "alk_cmd", action = action, locked = rec.locked and true or false, force = rec.manual == "unseal" or nil,
+        lockdown = self:lockdownOf(rec), why = (rec.role == "door" or rec.role == "security") and (why or self.why) or nil,
+        room = rec.role == "door" and rec.roomSet and (rec.room or false) or nil, rooms = rec.role == "security" and rec.roomSet and (rec.rooms or false) or nil,
+    })
 end
 
 function Airlock:applyPolicy(rec, announce)
@@ -797,7 +980,7 @@ function Airlock:applyPolicy(rec, announce)
         local now = compat.now()
         if prev == true and desired == false then
             rec.openedAt = now
-            self.lastOpen[M.stationOf(rec.group)] = now
+            self.lastOpen[self:stationOfRec(rec)] = now
         elseif prev == false and desired == true and rec.openedAt and now - rec.openedAt < M.PROBE and not rec.locked and not rec.manual and not rec.interlock then
             rec.backoffN = (rec.backoffN or 0) + 1
             rec.backoffUntil = now + math.min(M.BACKOFF_MAX, M.BACKOFF * 2 ^ (rec.backoffN - 1))
@@ -859,7 +1042,31 @@ function Airlock:handleMessage(senderID, msg, via)
     local nm = cleanName(msg.name)
     if nm ~= "" and not rec.named then rec.name = nm end
     if not rec.name or rec.name == "" then rec.name = "Airlock " .. key end
-    if msg.role == "sensor" or msg.role == "door" then rec.role = msg.role end
+    if msg.role == "sensor" or msg.role == "door" or msg.role == "room" or msg.role == "security" then
+        if rec.role ~= msg.role then self.topo = nil end
+        rec.role = msg.role
+    end
+    if not rec.roomSet then
+        if rec.role == "door" and msg.room ~= nil then
+            local v = cleanName(msg.room)
+            v = v ~= "" and v or nil
+            if v ~= rec.room then self.topo = nil end
+            rec.room = v
+        elseif rec.role == "room" and type(msg.room) == "string" then
+            local v = cleanName(msg.room)
+            if v ~= "" and v ~= rec.room then
+                rec.room = v
+                self.topo = nil
+            end
+        elseif rec.role == "security" and msg.rooms ~= nil then
+            rec.rooms = cleanRooms(msg.rooms)
+            self.topo = nil
+        end
+    end
+    if rec.role == "door" or rec.role == "security" then
+        if type(msg.ilHall) == "boolean" then rec.ilHall = msg.ilHall else rec.ilHall = nil end
+        if type(msg.ilRoom) == "boolean" then rec.ilRoom = msg.ilRoom else rec.ilRoom = nil end
+    end
     if type(msg.oxygenated) == "boolean" then
         if msg.oxygenated and rec.oxygenated ~= true then rec.oxyAt = isNew and (compat.now() - M.SETTLE) or compat.now() end
         if not msg.oxygenated and rec.oxygenated ~= false then rec.lowAt = isNew and (compat.now() - M.GRACE) or compat.now() end
@@ -874,6 +1081,7 @@ function Airlock:handleMessage(senderID, msg, via)
     rec.lastSeen = compat.now()
     rec.seen = compat.stamp()
     rec.online = true
+    if isNew or oldName ~= rec.name then self.topo = nil end
     M.normalize(rec)
     self.nodes[key] = rec
     self.counters.reports = self.counters.reports + 1
@@ -887,7 +1095,7 @@ function Airlock:handleMessage(senderID, msg, via)
     if msg.type ~= "alk_hello" or oldOxy ~= rec.oxygenated or oldIl ~= rec.interlock or (msg.sealed ~= nil and msg.sealed ~= oldSealed) then
         self:event(string.format("rx %s %s o2=%s sealed=%s il=%s%s", tostring(rec.name), msg.type:sub(5), tostring(msg.oxygenated), tostring(msg.sealed), tostring(msg.interlock == true), via and (" via " .. via) or ""))
     end
-    self:applyStation(M.stationOf(rec.group))
+    self:applyStation(self:stationOfRec(rec))
     self.counters.acks = self.counters.acks + 1
     rec.lockSync = rec.locked and true or false
     local command = (rec.role ~= "sensor" and rec.sealed) and "seal" or "unseal"
@@ -898,6 +1106,9 @@ function Airlock:handleMessage(senderID, msg, via)
         type = "alk_ack", reqID = msg.reqID, name = rec.name, role = rec.role,
         command = command, locked = rec.locked and true or false,
         force = rec.manual == "unseal" or nil, lockdown = self:lockdownOf(rec),
+        why = (rec.role == "door" or rec.role == "security") and why or nil,
+        room = rec.role == "door" and (rec.room or false) or nil, rooms = rec.role == "security" and (rec.rooms or false) or nil,
+        roomSet = rec.roomSet or nil, roomList = self:roomNames(),
     })
     self:maybeOffer(rec, msg)
     self:noteReport(rec, msg.type, isNew, wasOnline, oldOxy)
@@ -959,7 +1170,7 @@ end
 function Airlock:clearWait(rec)
     rec.backoffN = nil
     rec.backoffUntil = nil
-    self.lastOpen[M.stationOf(rec.group)] = nil
+    self.lastOpen[self:stationOfRec(rec)] = nil
 end
 
 function Airlock:setManual(id, mode, actor)
@@ -998,8 +1209,9 @@ function Airlock:rename(id, name, actor)
     if newName == "" then return nil, "Name is empty." end
     local oldGroup = rec.group
     rec.name = newName
-    rec.role = nil
+    if rec.role == "room" then rec.room = newName elseif rec.role ~= "security" then rec.role = nil end
     rec.named = true
+    self.topo = nil
     M.normalize(rec)
     self:applyGroup(oldGroup)
     self:applyGroup(rec.group)
@@ -1013,6 +1225,7 @@ function Airlock:remove(id, actor)
     local rec, err = self:find(id)
     if not rec then return nil, err end
     self.nodes[tostring(rec.id)] = nil
+    self.topo = nil
     self:applyGroup(rec.group)
     self:changed(rec, true)
     self:save()

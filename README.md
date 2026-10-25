@@ -83,17 +83,21 @@ Put a pocket computer in the server's setup drive, unlock the console, and on th
 
 An airlock computer needs a modem and redstone from an oxygen detector. It can be within wireless range of the server, on the server's cable, or within wireless range of any ZelNet router; routers pass airlock traffic to their server and back, so airlocks work anywhere the network reaches. Doors also drive the airlock block from a second side. Put a pocket computer in the setup drive and tap **Airlock** on the setup monitor (or use **Devices, New, Airlock** on the console). Put the pocket in a drive next to the airlock computer and reboot it. The first start asks:
 
-* **Door or oxygen sensor.** Doors open and seal; a sensor only reports the air in the chamber.
-* **A name.** Doors of one airlock share a name ending in a letter (`dock-A`, `dock-B`); the chamber sensor ends in `-C` (`dock-C`).
-* **The detector side, the door side and the monitor width.**
+* **What the computer is:**
+  * **Hallway door** opens and seals. Doors of one hallway share a name ending in a letter (`dock-A`, `dock-B`), and setup asks **which room the door opens into**, offering the rooms the server knows.
+  * **Hallway sensor** reports the air in its hallway and is named after its doors with `-C` (`dock-C`).
+  * **Room sensor** reports the air in a sealed room and asks for the room's name. `Hub`, `North`, `South`, `East` and `West` (any capitalization) also show on the Athena navmap; any other name works as well.
+  * **Security door** joins two rooms with no detector of its own. It is opened and closed from the console with lock and unlock, and it closes by itself while either room has no air.
+* **The detector side, the door side, the monitor width and an optional warning light.**
 
 Press **S** on the airlock computer at any time to change these; every question starts on the current answer. The airlock finds the server by itself and links to a rebuilt server too. Airlock control must be on (**Settings, Airlock control**). The program is `programs/airlock.lua` if you want to install it by hand.
 
 How sealing works:
 
-* **Each door joins two areas.** Its own detector reads the area on the far side; the group's `-C` sensor reads the zone between the doors. A door opens only when both areas hold oxygen.
+* **Each door joins two areas:** its hallway, read by the hallway's `-C` sensor, and the room it opens into, read by that room's sensor. A door opens only when both hold oxygen and seals when either does not. Its own detector is a local failsafe. A room without a room sensor online is judged from the detectors of the doors that open into it. The room of a door can also be set from the console under **Airlocks, (door), Set room**; a room set there wins over the door's own answer.
+* **Room sensors are the authority for their rooms.** Every door of a room listens to the same room sensor, so the doors of a room cannot disagree. Door screens show both areas and say why a door is sealed.
 * **The `-C` sensor is the authority for its doors.** Each sensor tells its own doors directly whenever its reading changes, and again every 10 seconds. While it reads no oxygen its doors refuse to open, whatever the server says, and report that back; the server then seals the other door of the zone too. Only a manual unseal from the console overrides this.
-* **Rooms vote.** On Station Athena the door detectors inside each common room (for example the three in South) form one area, and so do the four that read the hub. All detectors in a room share its air, so the room counts as breached only when most of them read no oxygen. One stale reading shows the room as settling instead of breached.
+* **Rooms vote when they have no sensor.** Without a room sensor, the detectors of the doors that open into a room form its area, and the room counts as breached only when most of them read no oxygen. On Station Athena doors that never answered the room question fall back to the built-in layout.
 * **Only the breached section seals.** When an area loses oxygen, every door that borders it seals and the rest of the station stays open.
 * **Confirmed losses only.** A low reading has to last 3 seconds before it counts, or 8 seconds when a door into that area just opened, because the doorway air reads as no oxygen for a moment after a door opens. This is what stops the doors from flapping.
 * **Staged reopening.** After a breach the whole station often drops at once, since open doors make it one volume. Doors then reopen one at a time, 4 seconds apart, once both of their sides have held oxygen for 8 seconds. A door that loses air within 15 seconds of opening closes again and waits 30 seconds before the next try, doubling up to 10 minutes. The breached area is the one whose doors never reopen.

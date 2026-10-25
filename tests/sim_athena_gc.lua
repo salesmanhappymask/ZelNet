@@ -55,13 +55,34 @@ local function world(opts)
             if n.sensor then W.sensors[z.group] = n else W.doors[#W.doors + 1] = n end
         end
     end
-    local function interlocked(n)
-        local p = n.peer
+    local roomName = {}
+    for _, c in ipairs(navmap.COMMONS) do roomName[c.id] = c.name end
+    if opts.rooms then
+        for _, c in ipairs(navmap.COMMONS) do
+            id = id + 1
+            local n = { id = id, name = c.name, room = c.id, roomSensor = true, sensor = true, open = true,
+                beatAt = math.random() * HEARTBEAT, peerAt = math.random() * PEER_EVERY }
+            W.nodes[id] = n
+            W.nodes[c.name] = n
+            all[#all + 1] = n
+        end
+    end
+    local function peerLow(n, key)
+        local p = n.peers and n.peers[key]
         if p == nil or not p.low or W.now - p.at >= PEER_STALE then return false end
         local afterOpen = n.unsealedAt ~= nil and p.since >= n.unsealedAt and p.since - n.unsealedAt < OPEN_GRACE
         return not afterOpen or W.now - p.since >= PEER_CONFIRM
     end
+    local function interlocked(n, key)
+        if key then return peerLow(n, key) end
+        return peerLow(n, "g") or peerLow(n, "r")
+    end
     function W.reading(n)
+        if n.roomSensor then
+            local a = W.areas[n.room]
+            if a.flickerUntil and W.now < a.flickerUntil then return false end
+            return a.o2
+        end
         if n.sensor then
             local z = W.areas[n.zone]
             if z.flickerUntil and W.now < z.flickerUntil then return false end
@@ -77,8 +98,15 @@ local function world(opts)
         return not n.open
     end
     local function send(n, kind, retry)
-        local msg = { type = kind, name = n.name, role = n.sensor and "sensor" or "door", oxygenated = n.reading,
-            sealed = (not n.sensor) and sealedNow(n) or nil, interlock = (not n.sensor) and interlocked(n) or nil, reqID = tostring(W.now) .. n.name }
+        local msg = { type = kind, name = n.name, role = n.roomSensor and "room" or (n.sensor and "sensor" or "door"), oxygenated = n.reading,
+            sealed = (not n.sensor) and sealedNow(n) or nil, interlock = (not n.sensor) and interlocked(n) or nil,
+            ilHall = (not n.sensor) and interlocked(n, "g") == true or nil, ilRoom = (not n.sensor) and interlocked(n, "r") == true or nil,
+            room = n.roomSensor and roomName[n.room] or ((opts.rooms and not n.sensor) and roomName[n.far] or nil),
+            reqID = tostring(W.now) .. n.name }
+        if not n.sensor then
+            msg.ilHall = interlocked(n, "g") and true or false
+            msg.ilRoom = interlocked(n, "r") and true or false
+        end
         if retry then n.retry = { reqID = msg.reqID, tries = (n.retry and n.retry.tries or 0) + 1, at = W.now + RETRY_EVERY } end
         if delivered() then al:handleMessage(n.id, msg) end
     end
@@ -98,21 +126,34 @@ local function world(opts)
         if delivered() then W.inbox[#W.inbox + 1] = { at = W.now + LATENCY, n = n, msg = msg } end
         return true
     end
+    local function hearPeer(d, key, low)
+        d.peers = d.peers or {}
+        local was = interlocked(d)
+        local p = d.peers[key]
+        d.peers[key] = { low = low, at = W.now, since = (low and p and p.low) and p.since or W.now }
+        if was ~= interlocked(d) then d.reportDue = true end
+        local anyLow = false
+        for _, q in pairs(d.peers) do
+            if q.low and W.now - q.at < PEER_STALE then anyLow = true end
+        end
+        local justOpened = d.unsealedAt and W.now - d.unsealedAt < OPEN_GRACE
+        if anyLow and not sealedNow(d) and not justOpened then
+            d.peerSealAt = d.peerSealAt or (W.now + PEER_DELAY)
+        elseif not anyLow then
+            d.peerSealAt = nil
+        end
+    end
     local function broadcastPeer(s)
+        local low = not s.reading
+        if s.roomSensor then
+            for _, d in ipairs(W.doors) do
+                if d.far == s.room and delivered() then hearPeer(d, "r", low) end
+            end
+            return
+        end
         for _, L in ipairs({ "A", "B" }) do
             local d = W.nodes[s.zone .. "-" .. L]
-            if delivered() then
-                local was = interlocked(d)
-                local low = not s.reading
-                d.peer = { low = low, at = W.now, since = (low and d.peer and d.peer.low) and d.peer.since or W.now }
-                if was ~= interlocked(d) then d.reportDue = true end
-                local justOpened = d.unsealedAt and W.now - d.unsealedAt < OPEN_GRACE
-                if d.peer.low and not sealedNow(d) and not justOpened then
-                    d.peerSealAt = d.peerSealAt or (W.now + PEER_DELAY)
-                elseif not d.peer.low then
-                    d.peerSealAt = nil
-                end
-            end
+            if delivered() then hearPeer(d, "g", low) end
         end
     end
     for _, n in ipairs(all) do
@@ -405,6 +446,33 @@ t.case("worst case: merge flicker and lost messages together still isolate only 
             W.run(420)
             expectShut(W, c.shut, "worst " .. c.b .. " seed " .. seed)
             t.eq(W.cmdsSince(W.now - 120), 0, "worst " .. c.b .. " seed " .. seed .. " settled")
+        end
+    end
+end)
+
+t.case("with room sensors: hallway and room breaches still isolate, over a lossy radio too", function()
+    local cases = {
+        { breach = "Athena7", shut = { ["Athena7-A"] = true, ["Athena7-B"] = true } },
+        { breach = "south", shut = SOUTH },
+        { breach = "north", shut = NORTH },
+        { breach = "hub", shut = HUB },
+    }
+    for _, drop in ipairs({ 0, 0.15 }) do
+        for _, c in ipairs(cases) do
+            for seed = 1, 2 do
+                math.randomseed(seed)
+                local W = world({ rooms = true, drop = drop, detect = function() return 1 + math.random() * 2 end, reseal = function() return 4 + math.random() * 4 end, blip = 3 })
+                W.run(30)
+                local label = "rooms drop " .. drop .. " " .. c.breach .. " seed " .. seed
+                t.eq(W.areaStates().sources.south, "sensor", label .. " South decided by its sensor")
+                W.breach[c.breach] = true
+                W.run(400)
+                expectShut(W, c.shut, label)
+                t.eq(W.cmdsSince(W.now - 120), 0, label .. " settled")
+                W.breach[c.breach] = nil
+                W.run(240)
+                expectShut(W, {}, label .. " repaired")
+            end
         end
     end
 end)

@@ -46,12 +46,16 @@ local state = {
     oxygenated = true,
     lightSide = "none",
     lockdown = false,
+    room = nil,
+    rooms = nil,
+    knownRooms = {},
+    why = nil,
 }
 
 local monitor = nil
 local lastHeard = nil
 local unsealedAt = nil
-local peer = nil
+local peers = {}
 local pending = nil
 local upd = nil
 local flashOn = false
@@ -210,7 +214,34 @@ local function scaleForWidth(w)
 end
 
 local function isSensor()
-    return state.role == "sensor"
+    return state.role == "sensor" or state.role == "room"
+end
+
+local function isSecurity()
+    return state.role == "security"
+end
+
+local function roomKey(name)
+    if type(name) ~= "string" then return nil end
+    local k = trim(name):lower()
+    if k == "" then return nil end
+    return k
+end
+
+local function peerKeys()
+    local keys = {}
+    if state.role == "door" then
+        local g = nameBase(state.name)
+        if g then keys[#keys + 1] = { key = "g:" .. g, kind = "hall", label = "Hallway" } end
+        local r = roomKey(state.room)
+        if r then keys[#keys + 1] = { key = "r:" .. r, kind = "room", label = state.room } end
+    elseif state.role == "security" then
+        for _, name in ipairs(state.rooms or {}) do
+            local r = roomKey(name)
+            if r then keys[#keys + 1] = { key = "r:" .. r, kind = "room", label = name } end
+        end
+    end
+    return keys
 end
 
 local function newReqID()
@@ -260,6 +291,7 @@ local function findMonitor()
 end
 
 local function readOxygen()
+    if isSecurity() then return true end
     local ok, val = pcall(redstone.getInput, state.detectorSide)
     if not ok then return state.oxygenated end
     return val and true or false
@@ -274,10 +306,29 @@ local function applyPhysical(sealed)
     state.sealed = sealed
 end
 
+local function peerLow(key)
+    local p = peers[key]
+    if p == nil or not p.low or os.clock() - p.at >= PEER_STALE then return false end
+    local afterOpen = unsealedAt ~= nil and p.since >= unsealedAt and p.since - unsealedAt < OPEN_GRACE
+    return not afterOpen or os.clock() - p.since >= PEER_CONFIRM
+end
+
+local function interlockOf(kind)
+    for _, k in ipairs(peerKeys()) do
+        if (kind == nil or k.kind == kind) and peerLow(k.key) then return true end
+    end
+    return false
+end
+
 local function interlocked()
-    if peer == nil or not peer.low or os.clock() - peer.at >= PEER_STALE then return false end
-    local afterOpen = unsealedAt ~= nil and peer.since >= unsealedAt and peer.since - unsealedAt < OPEN_GRACE
-    return not afterOpen or os.clock() - peer.since >= PEER_CONFIRM
+    return interlockOf(nil)
+end
+
+local function peerText(key)
+    local p = peers[key]
+    if p == nil or os.clock() - p.at >= PEER_STALE then return "--", C_MUTED end
+    if p.low then return "NO AIR", C_ERR end
+    return "air ok", C_OK
 end
 
 local function applyCommand(cmd, locked, force)
@@ -358,7 +409,7 @@ local function paint(dev, isTerm)
     if compact then
         put(2, 1, centerText(w - 2, state.name or (sensor and "SENSOR" or "AIRLOCK")), C_BRAND, C_HEAD)
     else
-        put(2, 1, sensor and "OXYGEN SENSOR" or "AIRLOCK", C_BRAND, C_HEAD)
+        put(2, 1, state.role == "room" and "ROOM SENSOR" or (sensor and "HALLWAY SENSOR" or (isSecurity() and "SECURITY DOOR" or "AIRLOCK")), C_BRAND, C_HEAD)
         local nm = state.name or "unnamed"
         put(math.max(2, w - #nm), 1, nm, C_BG, C_HEAD)
     end
@@ -372,11 +423,19 @@ local function paint(dev, isTerm)
         bannerCol = C_LOCK
         bannerTxt = compact and "LOCKED" or "LOCKED BY CONTROL"
     elseif compact then
-        bannerTxt = danger and "VENT!" or "SAFE"
+        if sensor then bannerTxt = danger and "VENT!" or "SAFE"
+        elseif not state.oxygenated then bannerTxt = "NO O2!"
+        else bannerTxt = state.sealed and "SEALED" or "OPEN" end
+    elseif state.role == "room" then
+        bannerTxt = danger and "ROOM VENTED" or "ROOM AIR OK"
     elseif sensor then
         bannerTxt = danger and "CHAMBER VENTED" or "CHAMBER OK"
+    elseif isSecurity() then
+        bannerTxt = state.sealed and "SECURITY DOOR CLOSED" or "SECURITY DOOR OPEN"
+    elseif not state.oxygenated then
+        bannerTxt = "!! NO OXYGEN !!"
     else
-        bannerTxt = danger and "!! DEPRESSURIZED !!" or "AREA SEALED - SAFE"
+        bannerTxt = state.sealed and "DOOR SEALED" or "AIR OK - DOOR OPEN"
     end
     if flashing() then bannerCol = flashOn and C_ERR or C_BG end
     local bTop = 3
@@ -399,31 +458,47 @@ local function paint(dev, isTerm)
     end
 
     local sy = bBot + 2
+    local doorText = locked and "LOCKED" or (state.sealed and "SEALED" or "OPEN")
+    local doorCol = locked and C_LOCK or (state.sealed and C_ERR or C_OK)
     if compact then
-        put(1, sy, centerText(w, "O2:" .. (state.oxygenated and "PRESENT" or "NONE")),
-            state.oxygenated and C_OK or C_ERR, C_BG)
-        if sensor then
+        if state.role == "room" then
+            put(1, sy, centerText(w, tostring(state.room or "room")), C_TEXT, C_BG)
+            put(1, sy + 1, centerText(w, "O2:" .. (state.oxygenated and "PRESENT" or "NONE")), state.oxygenated and C_OK or C_ERR, C_BG)
+        elseif sensor then
+            put(1, sy, centerText(w, "O2:" .. (state.oxygenated and "PRESENT" or "NONE")), state.oxygenated and C_OK or C_ERR, C_BG)
             put(1, sy + 1, centerText(w, "Sensor"), C_MUTED, C_BG)
         else
-            put(1, sy + 1, centerText(w, "Door:" .. (locked and "LOCK" or (state.sealed and (interlocked() and "HELD" or "SEAL") or "OPEN"))),
-                locked and C_LOCK or (state.sealed and C_ERR or C_OK), C_BG)
+            put(1, sy, centerText(w, "Door:" .. doorText), doorCol, C_BG)
+            local y = sy + 1
+            for _, k in ipairs(peerKeys()) do
+                local t, c = peerText(k.key)
+                put(1, y, centerText(w, (k.kind == "hall" and "Hall" or tostring(k.label)):sub(1, 7) .. ":" .. t), c, C_BG)
+                y = y + 1
+            end
         end
-        put(1, sy + 2, centerText(w, "Srv:" .. serverText(true)), linked() and C_MUTED or C_LOCK, C_BG)
+        put(1, h - (isTerm and 1 or 0), centerText(w, "Srv:" .. serverText(true)), linked() and C_MUTED or C_LOCK, C_BG)
     else
-        put(2, sy, "Oxygen  : " .. (state.oxygenated and "PRESENT" or "NONE"),
-            state.oxygenated and C_OK or C_ERR, C_BG)
-        if sensor then
-            put(2, sy + 1, "Role    : oxygen sensor", C_MUTED, C_BG)
-        else
-            put(2, sy + 1, "Bulkhead: " .. (locked and "LOCKED" or (state.sealed and (interlocked() and "SEALED, ZONE NO O2" or "SEALED") or "OPEN")),
-                locked and C_LOCK or (state.sealed and C_ERR or C_OK), C_BG)
+        local y = sy
+        local function line(label, text, col)
+            put(2, y, string.format("%-9s: %s", label, text), col or C_TEXT, C_BG)
+            y = y + 1
         end
-        put(2, sy + 2, "Server  : " .. serverText(false), linked() and C_MUTED or C_LOCK, C_BG)
-        if sensor then
-            put(2, sy + 3, "Detect " .. state.detectorSide, C_MUTED, C_BG)
+        if state.role == "room" then
+            line("Room", tostring(state.room or "?"), C_TEXT)
+            line("Oxygen", state.oxygenated and "PRESENT" or "NONE", state.oxygenated and C_OK or C_ERR)
+        elseif sensor then
+            line("Oxygen", state.oxygenated and "PRESENT" or "NONE", state.oxygenated and C_OK or C_ERR)
+            line("Role", "hallway sensor", C_MUTED)
         else
-            put(2, sy + 3, "Detect " .. state.detectorSide .. " / Door " .. state.airlockSide, C_MUTED, C_BG)
+            line(isSecurity() and "Door" or "Bulkhead", doorText, doorCol)
+            for _, k in ipairs(peerKeys()) do
+                local t, c = peerText(k.key)
+                if k.kind == "hall" then line("Hallway", t, c) else line("Room", tostring(k.label) .. ": " .. t, c) end
+            end
+            if not isSecurity() then line("Detector", state.oxygenated and "oxygen" or "NO OXYGEN", state.oxygenated and C_OK or C_ERR) end
+            if state.sealed and state.why then line("Why", state.why, C_LOCK) end
         end
+        line("Server", serverText(false), linked() and C_MUTED or C_LOCK)
     end
     if isTerm and h >= 2 then
         put(1, h, centerText(w, "S: setup"), C_MUTED, C_BG)
@@ -442,7 +517,7 @@ local function render()
 end
 
 local function message(kind)
-    return {
+    local m = {
         type = kind,
         name = state.name,
         role = state.role,
@@ -450,10 +525,18 @@ local function message(kind)
         sealed = state.sealed,
         locked = state.locked,
         interlock = (not isSensor()) and interlocked() or nil,
+
+        room = (state.role == "door" or state.role == "room") and (state.room or false) or nil,
+        rooms = isSecurity() and (state.rooms or false) or nil,
         ver = VERSION,
         keyed = KEY ~= nil,
         reqID = newReqID(),
     }
+    if not isSensor() then
+        m.ilHall = interlockOf("hall")
+        m.ilRoom = interlockOf("room")
+    end
+    return m
 end
 
 local function sendStatus(kind)
@@ -473,9 +556,39 @@ local function announce()
 end
 
 local function tellPeers()
-    local group = nameBase(state.name)
-    if isSensor() and group then
-        pcall(rednet.broadcast, { type = "alk_peer", group = group, oxygenated = state.oxygenated })
+    if state.role == "sensor" then
+        local group = nameBase(state.name)
+        if group then pcall(rednet.broadcast, { type = "alk_peer", group = group, oxygenated = state.oxygenated }) end
+    elseif state.role == "room" then
+        local r = roomKey(state.room)
+        if r then pcall(rednet.broadcast, { type = "alk_peer", room = r, oxygenated = state.oxygenated }) end
+    end
+end
+
+local function noteServerInfo(msg)
+    if type(msg.why) == "string" then state.why = msg.why:sub(1, 60) elseif msg.why == nil and not state.sealed then state.why = nil end
+    if type(msg.roomList) == "table" then
+        local list = {}
+        for i = 1, math.min(#msg.roomList, 16) do
+            if type(msg.roomList[i]) == "string" then list[#list + 1] = msg.roomList[i]:sub(1, 32) end
+        end
+        state.knownRooms = list
+    end
+    if state.role == "door" and msg.room ~= nil then
+        local r = msg.room or nil
+        if type(r) == "string" and r ~= state.room then
+            log("room set by the server: " .. r)
+            state.room = r
+            peers = {}
+        elseif r == nil and msg.roomSet and state.room ~= nil then
+            log("room cleared by the server")
+            state.room = nil
+        end
+    elseif isSecurity() and msg.rooms ~= nil and msg.roomSet then
+        local r = type(msg.rooms) == "table" and msg.rooms or nil
+        state.rooms = r
+        log("rooms set by the server: " .. (r and table.concat(r, " / ") or "none"))
+        peers = {}
     end
 end
 
@@ -501,6 +614,7 @@ local function onAck(id, msg)
     if not state.registered then state.registered = true end
     if pending and msg.reqID == pending.reqID then pending = nil end
     noteLockdown(msg.lockdown)
+    noteServerInfo(msg)
     local wasSealed = state.sealed
     local res = applyCommand(msg.command, msg.locked, msg.force)
     if res == "refused" then
@@ -635,24 +749,88 @@ local function sideOptions()
     return o
 end
 
+local function fetchRooms()
+    if state.knownRooms and #state.knownRooms > 0 then return end
+    local msg = message(state.registered and "alk_hello" or "alk_register")
+    if state.serverId then rednet.send(state.serverId, msg) else rednet.broadcast(msg) end
+    local deadline = os.clock() + 2
+    while os.clock() < deadline do
+        local id, reply = rednet.receive(math.max(0.05, deadline - os.clock()))
+        if id == nil then return end
+        if type(reply) == "table" and reply.type == "alk_ack" then
+            onAck(id, reply)
+            return
+        end
+    end
+end
+
+local function pickRoom(title, label, current, allowNone)
+    local opts = {}
+    local seen = {}
+    for _, name in ipairs(state.knownRooms or {}) do
+        opts[#opts + 1] = { label = name, value = name }
+        seen[name:lower()] = true
+    end
+    if type(current) == "string" and not seen[current:lower()] then opts[#opts + 1] = { label = current, value = current } end
+    opts[#opts + 1] = { label = "Type a room name", value = "__type" }
+    if allowNone then opts[#opts + 1] = { label = "None", value = "__none" } end
+    local pick = askChoice(title, label, opts, current or (allowNone and "__none" or nil))
+    if pick == "__none" then return nil end
+    if pick == "__type" then return askText(title, "Room name (Hub, North, South, East, West show on the navmap):", current or "") end
+    return pick
+end
+
 local function runSetup()
     state.role = askChoice("What is this computer?", "Pick its job:", {
-        { label = "Bulkhead door (opens and seals)", value = "door" },
-        { label = "Oxygen sensor (no door)", value = "sensor" },
+        { label = "Hallway door (opens and seals)", value = "door" },
+        { label = "Hallway sensor (no door)", value = "sensor" },
+        { label = "Room sensor (no door)", value = "room" },
+        { label = "Security door (between rooms)", value = "security" },
     }, state.role)
-    local suggestion = state.name
-    if not suggestion then suggestion = isSensor() and "dock-C" or "dock-A" end
-    local hint = isSensor() and "Same name as its doors, ending in -C (dock-C):" or "Doors of one airlock share a name: dock-A, dock-B:"
-    state.name = askText("Name", hint, suggestion)
-    state.detectorSide = askChoice("Oxygen detector", "Which side gets the detector's redstone?", sideOptions(), state.detectorSide)
+    if state.role == "room" then
+        state.room = askText("Room", "Room name (Hub, North, South, East, West show on the navmap):", state.room or state.name or "Hub")
+        state.name = state.room
+    elseif state.role == "security" then
+        state.name = askText("Name", "Name of this security door:", (state.name and not nameSuffix(state.name)) and state.name or "Vault")
+    else
+        local suggestion = state.name
+        if not suggestion or state.role ~= "door" and state.role ~= "sensor" then suggestion = isSensor() and "dock-C" or "dock-A" end
+        local hint = isSensor() and "Same name as its doors, ending in -C (dock-C):" or "Doors of one hallway share a name: dock-A, dock-B:"
+        state.name = askText("Name", hint, suggestion)
+    end
+    if state.role == "door" or state.role == "security" then fetchRooms() end
+    if state.role == "door" then
+        state.room = pickRoom("Room", "Which room does this door open into?", state.room, true)
+        state.rooms = nil
+    elseif state.role == "security" then
+        local cur = state.rooms or {}
+        local a = pickRoom("Room on one side", "Which room is on one side?", cur[1], true)
+        local b = pickRoom("Room on the other side", "Which room is on the other side?", cur[2], true)
+        local list = {}
+        if a then list[#list + 1] = a end
+        if b then list[#list + 1] = b end
+        state.rooms = #list > 0 and list or nil
+        state.room = nil
+    elseif state.role == "sensor" then
+        state.room = nil
+        state.rooms = nil
+    end
+    peers = {}
+    if not isSecurity() then
+        state.detectorSide = askChoice("Oxygen detector", "Which side gets the detector's redstone?", sideOptions(), state.detectorSide)
+    end
     if isSensor() then
         state.sealed = false
     else
         state.airlockSide = askChoice("Door output", "Which side drives the airlock door?", sideOptions(), state.airlockSide)
-        state.failsafe = askChoice("Failsafe", "Seal by itself if the air goes and the server is silent?", {
-            { label = "Yes (recommended)", value = true },
-            { label = "No", value = false },
-        }, state.failsafe)
+        if not isSecurity() then
+            state.failsafe = askChoice("Failsafe", "Seal by itself if the air goes and the server is silent?", {
+                { label = "Yes (recommended)", value = true },
+                { label = "No", value = false },
+            }, state.failsafe)
+        else
+            state.failsafe = true
+        end
     end
     state.displayWidth = askChoice("Monitor", "How many blocks wide is the monitor (if any)?", {
         { label = "1 wide (compact)", value = 1 },
@@ -663,7 +841,7 @@ local function runSetup()
     for _, o in ipairs(sideOptions()) do lights[#lights + 1] = o end
     if type(state.lightSide) == "string" and state.lightSide ~= "none" then pcall(redstone.setOutput, state.lightSide, false) end
     state.lightSide = askChoice("Warning light", "Side that pulses a lamp while sealed or locked down:", lights, state.lightSide or "none")
-    log("setup: " .. tostring(state.name) .. " " .. tostring(state.role) .. " detector " .. tostring(state.detectorSide) .. " door " .. tostring(state.airlockSide) .. " light " .. tostring(state.lightSide))
+    log("setup: " .. tostring(state.name) .. " " .. tostring(state.role) .. " room " .. tostring(state.room or (state.rooms and table.concat(state.rooms, "/")) or "-") .. " detector " .. tostring(state.detectorSide) .. " door " .. tostring(state.airlockSide) .. " light " .. tostring(state.lightSide))
     state.oxygenated = readOxygen()
     applyPhysical(state.sealed)
     saveState()
@@ -780,7 +958,7 @@ local function runtimeLoop()
             elseif peerTimer and ev[2] == peerTimer then
                 peerTimer = nil
                 if not state.sealed then
-                    log("zone sensor reports no oxygen, sealing")
+                    log("a sensor it listens to reports no oxygen, sealing")
                     applyPhysical(true)
                     saveState()
                     sendStatus("alk_status")
@@ -834,20 +1012,30 @@ local function runtimeLoop()
                     announce()
                     render()
                 elseif msg.type == "alk_peer" then
-                    if not isSensor() and nameBase(state.name) ~= nil and msg.group == nameBase(state.name) and type(msg.oxygenated) == "boolean" then
+                    local key
+                    if type(msg.group) == "string" then key = "g:" .. msg.group elseif type(msg.room) == "string" then key = "r:" .. msg.room end
+                    local mine
+                    for _, k in ipairs(peerKeys()) do if k.key == key then mine = k end end
+                    if mine and type(msg.oxygenated) == "boolean" then
                         local was = interlocked()
                         local low = not msg.oxygenated
-                        if not peer or peer.low ~= low then log("zone sensor: " .. (low and "NO OXYGEN" or "oxygen")) end
-                        peer = { low = low, at = os.clock(), since = (low and peer and peer.low) and peer.since or os.clock() }
+                        local p = peers[key]
+                        if not p or p.low ~= low then log((mine.kind == "hall" and "hallway sensor" or ("room " .. tostring(mine.label))) .. ": " .. (low and "NO OXYGEN" or "oxygen")) end
+                        peers[key] = { low = low, at = os.clock(), since = (low and p and p.low) and p.since or os.clock() }
                         if was ~= interlocked() then
                             log(interlocked() and "interlock on: will not open" or "interlock off")
                             sendStatus("alk_status")
-                            render()
                         end
+                        render()
                         local justOpened = unsealedAt ~= nil and os.clock() - unsealedAt < OPEN_GRACE
-                        if msg.oxygenated == false and state.failsafe and not state.sealed and not justOpened then
+                        local anyLow = false
+                        for _, k in ipairs(peerKeys()) do
+                            local q = peers[k.key]
+                            if q and q.low and os.clock() - q.at < PEER_STALE then anyLow = true end
+                        end
+                        if anyLow and state.failsafe and not state.sealed and not justOpened then
                             peerTimer = peerTimer or os.startTimer(PEER_DELAY)
-                        elseif msg.oxygenated == true then
+                        elseif not anyLow then
                             peerTimer = nil
                         end
                     end
@@ -866,6 +1054,7 @@ local function runtimeLoop()
                         sendStatus("alk_status_reply")
                     elseif msg.type == "alk_cmd" then
                         noteLockdown(msg.lockdown)
+                        noteServerInfo(msg)
                         local wasSealed = state.sealed
                         local res = applyCommand(msg.action, msg.locked, msg.force)
                         log("cmd from #" .. tostring(id) .. ": " .. tostring(msg.action) .. (msg.locked and " locked" or "") .. (msg.force and " forced" or "") .. (res == "refused" and " REFUSED (zone sensor no oxygen)" or (wasSealed ~= state.sealed and "" or " (no change)")))

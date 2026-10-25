@@ -1695,10 +1695,19 @@ function M.airlockLine(row, w)
     local state
     if rec.role == "sensor" then
         state = "[sensor]"
+    elseif rec.role == "room" then
+        state = "[room sensor]"
     else
         state = rec.locked and "LOCK" or (rec.sealed and "SEAL" or "OPEN")
+        if rec.role == "security" then
+            o2 = "-- "
+            state = state .. " [security]"
+        elseif rec.room then
+            state = state .. " > " .. tostring(rec.room)
+        end
     end
-    return pre .. dot .. " " .. util.padRight(util.fitText(label, 8), 8) .. " O2:" .. o2 .. " " .. state
+    local line = pre .. dot .. " " .. util.padRight(util.fitText(label, 8), 8) .. " O2:" .. o2 .. " " .. state
+    return util.fitText(line, w)
 end
 
 function Console:airlockBg(row, selected)
@@ -1878,7 +1887,7 @@ function Console:airlockMenu(id)
     while true do
         local rec = self:findAirlock(id)
         if not rec then return nil end
-        local isSensor = rec.role == "sensor"
+        local isSensor = rec.role == "sensor" or rec.role == "room"
         local items, acts = {}, {}
         local function add(label, act, color)
             items[#items + 1] = { label = label, color = color }
@@ -1889,12 +1898,13 @@ function Console:airlockMenu(id)
             add("Unseal", "unseal")
             add("Automatic", "auto")
             add(rec.locked and "Unlock bulkhead" or "Lock bulkhead", "lock", c.orange)
+            add("Set room", "room")
         end
         add("Rename", "rename")
         add("Poll now", "poll")
         add("Remove from manager", "remove", c.bad)
         local idx = ui.menu(self.surf, {
-            title = (isSensor and "Sensor: " or "Airlock: ") .. util.fitText(tostring(rec.name), 17),
+            title = (rec.role == "room" and "Room: " or (isSensor and "Sensor: " or (rec.role == "security" and "Security: " or "Airlock: "))) .. util.fitText(tostring(rec.name), 17),
             items = items,
             draw = function(page, ix, iy, iw) return self:drawAirlockInfo(page, ix, iy, iw, rec) end,
             refresh = function() return nil end, interval = 2,
@@ -1909,6 +1919,8 @@ function Console:airlockMenu(id)
         elseif act == "rename" then
             local nm = ui.ask(self.surf, "Rename", "New name:", { value = rec.name, intro = "Names like DOCK-A group doors; the suffix C marks the chamber sensor." })
             if nm and util.trim(nm) ~= "" then ok, err = self:call(al, "rename", rec.id, nm, "console") else ok = true end
+        elseif act == "room" then
+            ok, err = self:airlockSetRoom(rec)
         elseif act == "poll" then
             ok, err = self:call(al, "pollOne", rec.id)
         elseif act == "remove" then
@@ -1923,19 +1935,65 @@ function Console:airlockMenu(id)
     end
 end
 
+function Console:airlockSetRoom(rec)
+    local al = self.ctx.airlock
+    local names = self:call(al, "roomNames") or {}
+    local function pick(title, current)
+        local items = {}
+        for _, n in ipairs(names) do items[#items + 1] = { label = n, value = n } end
+        items[#items + 1] = { label = "Type a room name", value = "__type" }
+        items[#items + 1] = { label = "None", value = "__none" }
+        local v = self:choose(title, "Current: " .. tostring(current or "none"), items)
+        if v == nil then return false end
+        if v == "__none" then return nil end
+        if v == "__type" then
+            local t = ui.ask(self.surf, title, "Room name:", { value = current or "", intro = "Hub, North, South, East and West show on the navmap." })
+            if not t or util.trim(t) == "" then return false end
+            return util.trim(t)
+        end
+        return v
+    end
+    if rec.role == "security" then
+        local cur = rec.rooms or {}
+        local a = pick("Room on one side", cur[1])
+        if a == false then return true end
+        local b = pick("Room on the other side", cur[2])
+        if b == false then return true end
+        local list = {}
+        if a then list[#list + 1] = a end
+        if b then list[#list + 1] = b end
+        return self:call(al, "setRoom", rec.id, list, "console")
+    end
+    local v = pick("Room for " .. tostring(rec.name), rec.room)
+    if v == false then return true end
+    return self:call(al, "setRoom", rec.id, v or "", "console")
+end
+
 function Console:drawAirlockInfo(page, ix, iy, iw, rec)
     local s, c = page.s, page.c
     s:field(ix, iy, iw, "ID " .. tostring(rec.id) .. "  " .. (rec.online and "online" or "OFFLINE"), c.muted, c.inset)
+    if rec.role == "room" then
+        s:field(ix, iy + 1, iw, "Room " .. tostring(rec.room or rec.name) .. ": " .. (rec.oxygenated == false and "NO OXYGEN" or "oxygen OK"), rec.oxygenated == false and c.bad or c.ok, c.inset)
+        return 3
+    end
     if rec.role == "sensor" then
         s:field(ix, iy + 1, iw, rec.oxygenated == false and "CHAMBER VENTED" or "Chamber oxygen OK", rec.oxygenated == false and c.bad or c.ok, c.inset)
         return 3
+    end
+    if rec.role == "security" then
+        local mode = rec.locked and "LOCKED" or (rec.manual and ("Override: " .. tostring(rec.manual)) or "unlocked")
+        s:field(ix, iy, iw, "ID " .. tostring(rec.id) .. "  " .. (rec.online and "" or "OFFLINE  ") .. mode, rec.locked and c.orange or c.muted, c.inset)
+        s:field(ix, iy + 1, iw, "Rooms: " .. (rec.rooms and table.concat(rec.rooms, " / ") or "none"), c.muted, c.inset)
+        s:field(ix, iy + 2, iw, rec.sealed and "Door CLOSED" or "Door OPEN", rec.sealed and c.bad or c.ok, c.inset)
+        return 4
     end
     local mode = rec.locked and "SERVER LOCK" or (rec.manual and ("Override: " .. tostring(rec.manual)) or "Mode: auto")
     s:field(ix, iy, iw, "ID " .. tostring(rec.id) .. "  " .. (rec.online and "" or "OFFLINE  ") .. mode, rec.locked and c.orange or c.muted, c.inset)
     s:field(ix, iy + 1, iw, rec.oxygenated == false and "AREA DEPRESSURIZED" or "Area oxygen OK", rec.oxygenated == false and c.bad or c.ok, c.inset)
     local door = rec.locked and "Bulkhead LOCKED by control" or (rec.sealed and "Bulkhead SEALED" or "Bulkhead OPEN")
     s:field(ix, iy + 2, iw, door, rec.sealed and c.bad or c.ok, c.inset)
-    return 4
+    s:field(ix, iy + 3, iw, "Opens into room: " .. tostring(rec.room or "not set"), c.muted, c.inset)
+    return 5
 end
 
 function Console:storageRows()

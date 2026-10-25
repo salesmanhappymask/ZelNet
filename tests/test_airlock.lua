@@ -438,7 +438,7 @@ t.case("event log records reports, commands with reasons and area changes; bundl
     tick(al, airlock.LOSS_CONFIRM)
     local text = table.concat(al.events, "\n")
     t.ok(text:find("rx Athena6-C status o2=false", 1, true), "report logged")
-    t.ok(text:find("cmd Athena6-A seal (zone has no oxygen", 1, true), "command logged with its reason")
+    t.ok(text:find("cmd Athena6-A seal (hallway Athena6: no oxygen)", 1, true), "command logged with its reason")
     t.ok(text:find("area zone Athena6 holding -> pending", 1, true) and text:find("area zone Athena6 pending -> lost", 1, true), "area changes logged")
     resetNet()
     t.eq(al:requestLogs(), 24)
@@ -448,7 +448,7 @@ t.case("event log records reports, commands with reasons and area changes; bundl
     t.ok(not al:handleMessage(ids["Athena6-B"], { type = "alk_log", nonce = "wrong", text = "x" }), "stale dump ignored")
     local b = al:logBundle("server MARS #4 r40")
     t.ok(b:find("ZELNET AIRLOCK LOG BUNDLE", 1, true))
-    t.ok(b:find("Athena6-A", 1, true) and b:find("zone has no oxygen", 1, true), "airlock table shows why each door is sealed")
+    t.ok(b:find("Athena6-A", 1, true) and b:find("hallway Athena6: no oxygen", 1, true), "airlock table shows why each door is sealed")
     t.ok(b:find("== Athena6-A (#" .. ids["Athena6-A"] .. ") local log", 1, true) and b:find("boot Athena6-A", 1, true), "door log included")
     t.ok(b:find("Athena6-B (#" .. ids["Athena6-B"] .. ") sent no log", 1, true), "missing door log noted")
 end)
@@ -558,6 +558,131 @@ t.case("an area that keeps losing air must hold longer before doors open into it
     t.eq(al:areaStates("Athena").commons.hub, "pending", "8 seconds is no longer enough")
     tick(al, airlock.UNSTABLE_SETTLE)
     t.eq(al:areaStates("Athena").commons.hub, "holding", "30 seconds of steady air is")
+end)
+
+local ROOM_OF = {
+    ["Athena-A"] = "Hub", ["Athena2-A"] = "Hub", ["Athena3-A"] = "Hub", ["Athena4-A"] = "Hub",
+    ["Athena2-B"] = "North", ["Athena5-B"] = "North", ["Athena8-B"] = "North",
+    ["Athena-B"] = "South", ["Athena6-A"] = "South", ["Athena7-A"] = "South",
+    ["Athena3-B"] = "West", ["Athena6-B"] = "West", ["Athena8-A"] = "West",
+    ["Athena4-B"] = "East", ["Athena5-A"] = "East", ["Athena7-B"] = "East",
+}
+
+local function roomed(al)
+    local ids = {}
+    local id = 100
+    for _, g in ipairs({ "Athena", "Athena2", "Athena3", "Athena4", "Athena5", "Athena6", "Athena7", "Athena8" }) do
+        for _, L in ipairs({ "A", "B", "C" }) do
+            id = id + 1
+            local name = g .. "-" .. L
+            ids[name] = id
+            al:handleMessage(id, { type = "alk_register", name = name, role = L == "C" and "sensor" or "door", room = ROOM_OF[name], oxygenated = true, sealed = false })
+        end
+    end
+    for _, room in ipairs({ "Hub", "North", "South", "East", "West" }) do
+        id = id + 1
+        ids[room] = id
+        al:handleMessage(id, { type = "alk_register", name = room, role = "room", room = room, oxygenated = true })
+    end
+    return ids
+end
+
+t.case("room sensors are the authority for their rooms", function()
+    resetNet()
+    local al = mk()
+    local ids = roomed(al)
+    t.eq(al:roomKeyOf(al.nodes[tostring(ids["Athena7-A"])]), "south")
+    t.eq(al:stationOfRec(al.nodes[tostring(ids["South"])]), "Athena", "room sensors join the station")
+    local names = al:roomNames()
+    t.eq(table.concat(names, ","), "East,Hub,North,South,West")
+    resetNet()
+    al:handleMessage(ids["Athena7-A"], { type = "alk_status", oxygenated = false, sealed = false })
+    tick(al, airlock.LOSS_CONFIRM + 1)
+    t.eq(#sentTo(ids["Athena6-A"], "alk_cmd"), 0, "one door detector disagreeing with the South sensor changes nothing")
+    t.eq(al:areaStates("Athena").commons.south, "holding")
+    t.eq(al:areaStates("Athena").sources.south, "sensor")
+    al:handleMessage(ids["Athena7-A"], { type = "alk_status", oxygenated = true, sealed = false })
+    resetNet()
+    al:handleMessage(ids["South"], { type = "alk_status", oxygenated = false })
+    tick(al, airlock.LOSS_CONFIRM)
+    for _, n in ipairs({ "Athena-B", "Athena6-A", "Athena7-A" }) do t.eq(lastCmd(ids[n]), "seal", n .. " seals when the South sensor reads no oxygen") end
+    t.eq(#sentTo(ids["Athena-A"], "alk_cmd"), 0, "hub side untouched")
+    local c = sentTo(ids["Athena7-A"], "alk_cmd")
+    t.eq(c[#c].why, "room South: no oxygen", "the door is told why")
+    resetNet()
+    al:handleMessage(ids["South"], { type = "alk_status", oxygenated = true })
+    tick(al, airlock.SETTLE + 3 * airlock.OPEN_GAP + 1)
+    for _, n in ipairs({ "Athena-B", "Athena6-A", "Athena7-A" }) do t.eq(lastCmd(ids[n]), "unseal", n .. " reopens") end
+end)
+
+t.case("a door held by its room sensor does not mark its hallway as lost", function()
+    resetNet()
+    local al = mk()
+    local ids = roomed(al)
+    al:handleMessage(ids["Athena-B"], { type = "alk_status", oxygenated = false, sealed = true, interlock = true, ilHall = false, ilRoom = true })
+    tick(al, airlock.LOSS_CONFIRM + 1)
+    local st = al:areaStates("Athena")
+    t.eq(st.zones.Athena, "holding", "hallway Athena still holds")
+    t.eq(st.commons.south, "lost", "South counts as lost from the interlock")
+    t.eq(al.nodes[tostring(ids["Athena-A"])].sealed, false, "the hub side door stays open")
+end)
+
+t.case("without an online room sensor the room falls back to its doors' detectors", function()
+    resetNet()
+    local al = mk()
+    local ids = roomed(al)
+    al.nodes[tostring(ids["North"])].online = false
+    t.eq(al:areaStates("Athena").sources.north, "doors")
+    resetNet()
+    al:handleMessage(ids["Athena2-B"], { type = "alk_status", oxygenated = false, sealed = false })
+    al:handleMessage(ids["Athena5-B"], { type = "alk_status", oxygenated = false, sealed = false })
+    tick(al, airlock.LOSS_CONFIRM)
+    t.eq(lastCmd(ids["Athena8-B"]), "seal", "two of three North doors read no oxygen")
+end)
+
+t.case("door rooms come from setup, can be set from the console, and the list is shared", function()
+    resetNet()
+    local al = mk()
+    local ids = roomed(al)
+    local acks = sentTo(ids["Athena7-A"], "alk_ack")
+    t.eq(acks[#acks].room, "South")
+    t.ok(table.concat(acks[#acks].roomList, ","):find("South", 1, true))
+    resetNet()
+    t.ok(al:setRoom(ids["Athena7-A"], "Galley"))
+    local c = sentTo(ids["Athena7-A"], "alk_cmd")
+    t.eq(c[#c].room, "Galley", "the door is told its new room")
+    al:handleMessage(ids["Athena7-A"], { type = "alk_status", room = "South", oxygenated = true, sealed = false })
+    t.eq(al.nodes[tostring(ids["Athena7-A"])].room, "Galley", "a room set on the console wins")
+    t.eq(al:roomKeyOf(al.nodes[tostring(ids["Athena7-A"])]), "galley")
+    t.ok(table.concat(al:roomNames(), ","):find("Galley", 1, true))
+    t.eq(select(2, al:setRoom(ids["Athena7-C"], "x")), "Only doors and security doors open into rooms.")
+end)
+
+t.case("security doors lock and unlock from the console and close when a room loses air", function()
+    resetNet()
+    local al = mk()
+    local ids = roomed(al)
+    al:handleMessage(500, { type = "alk_register", name = "Vault", role = "security", rooms = { "North", "East" }, oxygenated = true, sealed = false })
+    local vault = al.nodes["500"]
+    t.eq(vault.role, "security")
+    t.eq(al:stationOfRec(vault), "Athena")
+    t.eq(vault.sealed, false, "open while unlocked")
+    resetNet()
+    al:setLocked(500, true)
+    t.eq(lastCmd(500), "seal")
+    al:setLocked(500, false)
+    t.eq(lastCmd(500), "unseal")
+    resetNet()
+    al:handleMessage(ids["East"], { type = "alk_status", oxygenated = false })
+    tick(al, airlock.GRACE)
+    t.eq(lastCmd(500), "seal", "closes when East loses air")
+    t.eq(sentTo(500, "alk_cmd")[1].why, "room East: no oxygen")
+    al:handleMessage(ids["East"], { type = "alk_status", oxygenated = true })
+    tick(al, airlock.SETTLE + 1)
+    t.eq(lastCmd(500), "unseal", "reopens once East holds air")
+    al:lockdown("Athena", "admin")
+    t.eq(lastCmd(500), "seal", "lockdown closes it")
+    t.eq(sentTo(ids["South"], "alk_cmd")[#sentTo(ids["South"], "alk_cmd")].lockdown, true, "room sensors hear about the lockdown")
 end)
 
 t.case("manual modes, locking, rename and remove", function()
