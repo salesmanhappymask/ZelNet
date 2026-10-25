@@ -1003,6 +1003,23 @@ function M.energyCell(world, opts)
     return p
 end
 
+local Camera = setmetatable({}, { __index = Base })
+Camera.__index = Camera
+
+function M.camera(world, opts)
+    opts = opts or {}
+    local p = M.new(world, opts.type or "camera", Camera)
+    p.scene = opts.scene or function() return -1 end
+    p.calls = 0
+    p:def("distance", function(self, access, x, y)
+        self.calls = self.calls + 1
+        if type(x) ~= "number" or type(y) ~= "number" then x, y = 0, 0 end
+        if x < -1 or x > 1 or y < -1 or y > 1 then return -1 end
+        return self.scene(x, y)
+    end, true)
+    return p
+end
+
 function Cell:setStored(n)
     self.stored = n
 end

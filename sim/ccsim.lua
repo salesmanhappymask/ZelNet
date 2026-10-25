@@ -286,6 +286,10 @@ function World:energyCell(opts)
     return periph.energyCell(self, opts)
 end
 
+function World:camera(opts)
+    return periph.camera(self, opts)
+end
+
 function World:touch(monitor, x, y)
     return monitor:touch(x, y)
 end

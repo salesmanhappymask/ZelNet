@@ -270,10 +270,12 @@ function M.buildServer(cfg, opts)
     local server = mods.server or need("server")
     local tekmail = mods.tekmail or need("tekmail")
     local airlock = mods.airlock or need("airlock")
+    local camera = mods.camera or tryNeed("camera")
     ctx.storage = storage.new(ctx)
     ctx.server = server.new(ctx)
     ctx.tekmail = tekmail.new(ctx)
     ctx.airlock = airlock.new(ctx)
+    if camera then ctx.camera = camera.new(ctx) end
     local api = tryNeed("api")
     if api then api.attach(n) end
     return ctx
@@ -289,6 +291,7 @@ function M.startServer(ctx)
     ctx.server:start()
     ctx.tekmail:start()
     ctx.airlock:start()
+    if ctx.camera then ctx.camera:start() end
     local n = ctx.node
     n:spawn(function()
         while true do

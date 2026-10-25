@@ -1417,22 +1417,25 @@ function Console:network()
 end
 
 function Console:realmMenu(r)
-    if type(r) ~= "table" or r.realm == self.cfg.realm then return nil end
+    if type(r) ~= "table" then return nil end
     local srv = self.ctx.server
+    local here = r.realm == self.cfg.realm
     local lines = {
-        "Realm " .. r.realm .. (r.main and " (Main)" or ""),
-        r.reachable and ("Reachable, metric " .. tostring(r.metric)) or "Unreachable",
+        "Realm " .. r.realm .. (r.main and " (Main)" or "") .. (here and ", this server" or ""),
+        here and "This server" or (r.reachable and ("Reachable, metric " .. tostring(r.metric)) or "Unreachable"),
         "Release " .. tostring(r.prog or "unknown"),
     }
-    if self.cfg.role ~= "main" then
-        self:say("Realm " .. r.realm, lines)
-        return nil
-    end
-    local choice = self:choose("Realm " .. r.realm, r.reachable and "reachable" or "unreachable", {
+    local items = {
+        { label = "View camera", hint = "on the activity monitor", value = "camera" },
         { label = "Details", value = "details" },
-        { label = "Remove realm", hint = "forget it everywhere", value = "remove", color = self.surf.c.bad },
-    })
-    if choice == "details" then
+    }
+    if self.cfg.role == "main" and not here then
+        items[#items + 1] = { label = "Remove realm", hint = "forget it everywhere", value = "remove", color = self.surf.c.bad }
+    end
+    local choice = self:choose("Realm " .. r.realm, here and "this server" or (r.reachable and "reachable" or "unreachable"), items)
+    if choice == "camera" then
+        return self:viewCamera(r.realm)
+    elseif choice == "details" then
         self:say("Realm " .. r.realm, lines)
     elseif choice == "remove" then
         if r.reachable then
@@ -1443,6 +1446,23 @@ function Console:realmMenu(r)
         self:audit("realm_remove", r.realm, ok and nil or err, ok)
         self:result("Remove Realm", ok, err, r.realm .. " is removed. The other servers drop it on their next directory update.")
     end
+    return nil
+end
+
+function Console:viewCamera(realm)
+    local cam = self.ctx.camera
+    if not cam or not cam.node then return self:result("View Camera", false, "The camera module is not running on this server.") end
+    local disp = type(self.cfg.displays) == "table" and self.cfg.displays or {}
+    if type(disp.activity) ~= "string" or disp.activity == "" then
+        return self:result("View Camera", false, "No activity monitor is set up. Pick one under Settings, Displays first.")
+    end
+    cam:startView(realm)
+    self:audit("camera_view", tostring(realm), nil, true)
+    self:say("View Camera", {
+        { text = "Showing " .. tostring(realm) .. "'s camera on the activity monitor.", color = self.surf.c.ok },
+        "The picture fills in row by row; each dot is one ray of the camera's depth scan, near is white, far is blue, black is nothing within 32 blocks.",
+        "Right click the activity monitor to close the viewer.",
+    })
     return nil
 end
 

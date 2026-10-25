@@ -41,7 +41,7 @@ M.PROGRAM_PATH = "/zelnet"
 local Server = {}
 Server.__index = Server
 
-local SERVER_ONLY_PORTS = { ["zn.ps"] = true, ["zn.err"] = true, ["zn.hello"] = true, ["zn.update"] = true }
+local SERVER_ONLY_PORTS = { ["zn.ps"] = true, ["zn.err"] = true, ["zn.hello"] = true, ["zn.update"] = true, ["zn.cam"] = true }
 
 function M.updateAad(ver, size, sha)
     return "zn.update|" .. tostring(ver) .. "|" .. tostring(size) .. "|" .. tostring(sha)

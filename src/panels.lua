@@ -363,7 +363,13 @@ end
 
 function Panels:touch(name, x, y)
     local d = self:names()
-    if name == d.console then
+    if name == d.activity then
+        local view, cam = self:cameraView()
+        if view then
+            cam:stopView()
+            self:guard("activity", self.drawActivity)
+        end
+    elseif name == d.console then
         local s = self.surfs.console
         local act = s and self.consolePage and self.consolePage:hit(x, y)
         if act then
@@ -471,9 +477,123 @@ function M.table(page, x, y, w, h, cols, rows, offset)
     return offset, maxOff
 end
 
+M.CAM_RAMP = { colors.white, colors.lightGray, colors.yellow, colors.orange, colors.red, colors.magenta, colors.purple, colors.blue, colors.gray }
+M.CAM_CHARS = "@%#*+=-:."
+M.CAM_RANGE = 32
+
+function M.camShade(d, isColor)
+    local n = isColor and #M.CAM_RAMP or #M.CAM_CHARS
+    local i = util.clamp(math.floor(math.sqrt(math.max(0, d) / M.CAM_RANGE) * n) + 1, 1, n)
+    if isColor then return " ", M.CAM_RAMP[i] end
+    return M.CAM_CHARS:sub(i, i), colors.black
+end
+
+function Panels:cameraView()
+    local cam = self.con.ctx and self.con.ctx.camera
+    return cam and cam.view, cam
+end
+
+function Panels:drawCamera(s, view)
+    local page = ui.page(s)
+    local c = page.c
+    header(page, "Camera " .. tostring(view.realm), "ZelNet " .. tostring(self.cfg.realm))
+    local W, H = s.w, s.h
+    local rightW = util.clamp(math.floor(W * 0.32), 18, 30)
+    if W < 50 then rightW = 0 end
+    local leftW = W - 2 - (rightW > 0 and rightW + 1 or 0)
+    local foot = H
+    local ix, iy, iw, ih = page:card(2, 3, leftW, H - 3, "View from " .. tostring(view.realm), c.accent, tostring(view.status))
+    if ix then
+        local ch = ih
+        local cw = math.min(iw, math.max(4, math.floor(ch * 1.6 + 0.5)))
+        if cw < ch * 1.6 then ch = math.max(3, math.floor(cw / 1.6 + 0.5)) end
+        local mod0 = need("camera")
+        local capH = math.min(ch, mod0.MAX_H)
+        view.w, view.h = mod0.clampSize(math.floor(capH * 1.6 + 0.5), capH)
+        local f = view.frame
+        local ox = ix + math.floor((iw - cw) / 2)
+        local oy = iy + math.floor((ih - ch) / 2)
+        if f and f.w and f.h then
+            local mod = need("camera")
+            local sx, sy = cw / f.w, ch / f.h
+            for y = 1, ch do
+                local fr = math.min(f.h, math.floor((y - 1) / sy) + 1)
+                local line = f.rows and f.rows[fr]
+                for x = 1, cw do
+                    local fc = math.min(f.w, math.floor((x - 1) / sx) + 1)
+                    local code = line and line:sub(fc, fc) or ""
+                    if code == "" then
+                        s:text(ox + x - 1, oy + y - 1, ".", c.dim, c.inset)
+                    else
+                        local d = mod.decode(code)
+                        if d == nil then
+                            s:text(ox + x - 1, oy + y - 1, " ", c.text, colors.black)
+                        else
+                            local chr, bg = M.camShade(d, s.isColor)
+                            s:text(ox + x - 1, oy + y - 1, chr, colors.white, bg)
+                        end
+                    end
+                end
+            end
+            if f.row and f.row >= 1 and f.row < f.h and (f.frames or 0) == 0 then
+                local yy = oy + math.floor((f.row - 1) * sy)
+                s:text(ox + cw, yy, "<", c.warn, c.bg)
+            end
+        else
+            page:wrapped(ix, iy, iw, ih, view.err and ("No picture: " .. view.err) or "Waiting for the first rows from " .. tostring(view.realm) .. "...", view.err and c.bad or c.muted)
+        end
+    end
+    if rightW > 0 then
+        local rx = 2 + leftW + 1
+        local px, py, pw, ph = page:card(rx, 3, rightW, H - 3, "Report", c.purple)
+        if px then
+            local r = view.report or (view.frame and view.frame.report) or {}
+            local f = view.frame or {}
+            local lines = {
+                { "Realm", tostring(r.realm or view.realm) },
+                { "Status", tostring(view.status), view.err and c.bad or c.ok },
+                { "Camera", r.camera and ("camera " .. (tostring(r.camera):match("(%d+)$") or "")) or "none" },
+                { "Ahead", r.ahead and r.ahead >= 0 and (util.fmtFixed(r.ahead, 1) .. " blocks") or "open" },
+                { "Frames", tostring(f.frames or 0) .. (f.row and f.h and (" row " .. f.row .. "/" .. f.h) or "") },
+                { "Size", f.w and (f.w .. "x" .. f.h) or "-" },
+                { "Release", tostring(r.rel or "?") },
+                { "Uptime", r.uptime and util.fmtDuration(r.uptime) or "?" },
+                { "Devices", r.devices and (tostring(r.online or 0) .. "/" .. tostring(r.devices) .. " online") or "?" },
+                { "Updated", view.at and (util.fmtDuration(compat.now() - view.at) .. " ago") or "never" },
+            }
+            local row = py
+            for _, l in ipairs(lines) do
+                if row >= py + ph - 3 then break end
+                page:kv(px, row, pw, l[1], l[2], l[3])
+                row = row + 1
+            end
+            local ly = py + ph - 3
+            if ly > row then
+                s:text(px, ly, "near", c.muted, c.inset)
+                local n = s.isColor and #M.CAM_RAMP or #M.CAM_CHARS
+                local bx = px + 5
+                local bw = math.max(1, pw - 9)
+                for k = 0, bw - 1 do
+                    local d = ((k + 0.5) / bw) ^ 2 * M.CAM_RANGE
+                    local chr, bg = M.camShade(d, s.isColor)
+                    s:text(bx + k, ly, chr, colors.white, bg)
+                end
+                s:text(bx + bw, ly, " far", c.muted, c.inset)
+                if n > 0 then s:field(px, ly + 1, pw, "black = nothing in 32", c.dim, c.inset) end
+                s:field(px, ly + 2, pw, "Right click to close", c.warn, c.inset)
+            end
+        end
+    else
+        s:field(1, foot, W, "Right click to close", c.warn, c.bg, "center")
+    end
+    s:flush()
+end
+
 function Panels:drawActivity()
     local s = self:surface("activity")
     if not s then return end
+    local view = self:cameraView()
+    if view then return self:drawCamera(s, view) end
     local page = ui.page(s)
     local c = page.c
     local snap = self.data.snap

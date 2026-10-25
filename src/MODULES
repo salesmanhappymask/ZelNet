@@ -21,6 +21,7 @@ backbone
 server
 tekmail
 airlock
+camera
 provision
 updater
 prog_airlock
