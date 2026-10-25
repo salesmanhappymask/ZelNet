@@ -4,14 +4,20 @@ local need = require("tools.devload").make(".")
 local camera = need("camera")
 local t = require("tests.tiny")
 
-t.case("distances survive the encoding to half a block", function()
+t.case("distances survive the encoding to a hundredth of a block", function()
     t.eq(camera.encode(-1), camera.NONE)
     t.eq(camera.decode(camera.NONE), nil)
     for _, d in ipairs({ 0, 0.4, 1, 7.3, 15.5, 30 }) do
         local back = camera.decode(camera.encode(d))
         t.ok(math.abs(back - d) <= camera.STEP, d .. " came back as " .. tostring(back))
     end
-    t.eq(camera.decode(camera.encode(500)), (#camera.ALPHABET - 1) * camera.STEP)
+    t.eq(#camera.encode(3), 2)
+    t.ok(camera.decode(camera.encode(500)) > 32, "the top of the scale must cover the camera range")
+    t.eq(camera.decode("4"), 2, "one character codes from r52 servers still read")
+    local f = { w = 2, h = 1, cw = 2, rows = { camera.encode(3) .. camera.UNSEEN } }
+    local grid = camera.filled(f)
+    t.ok(math.abs(grid[1][1] - 3) < 0.01)
+    t.eq(grid[1][2], 3, "an unscanned cell takes its coarse neighbor's value")
 end)
 
 t.case("rays cover the whole view, top row looking up", function()

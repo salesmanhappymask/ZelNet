@@ -1426,15 +1426,16 @@ function Console:realmMenu(r)
         "Release " .. tostring(r.prog or "unknown"),
     }
     local items = {
-        { label = "View camera", hint = "on the activity monitor", value = "camera" },
+        { label = "View camera", hint = "shaded, on the activity monitor", value = "camera" },
+        { label = "Depth view", hint = "colors by distance", value = "depth" },
         { label = "Details", value = "details" },
     }
     if self.cfg.role == "main" and not here then
         items[#items + 1] = { label = "Remove realm", hint = "forget it everywhere", value = "remove", color = self.surf.c.bad }
     end
     local choice = self:choose("Realm " .. r.realm, here and "this server" or (r.reachable and "reachable" or "unreachable"), items)
-    if choice == "camera" then
-        return self:viewCamera(r.realm)
+    if choice == "camera" or choice == "depth" then
+        return self:viewCamera(r.realm, choice == "depth" and "depth" or "scene")
     elseif choice == "details" then
         self:say("Realm " .. r.realm, lines)
     elseif choice == "remove" then
@@ -1449,18 +1450,25 @@ function Console:realmMenu(r)
     return nil
 end
 
-function Console:viewCamera(realm)
+function Console:viewCamera(realm, mode)
     local cam = self.ctx.camera
     if not cam or not cam.node then return self:result("View Camera", false, "The camera module is not running on this server.") end
     local disp = type(self.cfg.displays) == "table" and self.cfg.displays or {}
     if type(disp.activity) ~= "string" or disp.activity == "" then
         return self:result("View Camera", false, "No activity monitor is set up. Pick one under Settings, Displays first.")
     end
-    cam:startView(realm)
-    self:audit("camera_view", tostring(realm), nil, true)
+    cam:startView(realm, mode)
+    self:audit("camera_view", tostring(realm), mode, true)
+    local how
+    if mode == "depth" then
+        how = "Each cell is one ray of the camera's depth scan: near is white, far is blue, black is nothing within 32 blocks."
+    else
+        how = "A shaded view built from the camera's depth scan: surfaces are lit from above, edges are outlined and black is open space."
+    end
     self:say("View Camera", {
         { text = "Showing " .. tostring(realm) .. "'s camera on the activity monitor.", color = self.surf.c.ok },
-        "The picture fills in row by row; each dot is one ray of the camera's depth scan, near is white, far is blue, black is nothing within 32 blocks.",
+        "A rough picture comes first and sharpens over about a minute as more rays come in.",
+        how,
         "Right click the activity monitor to close the viewer.",
     })
     return nil

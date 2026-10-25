@@ -488,6 +488,30 @@ function M.camShade(d, isColor)
     return M.CAM_CHARS:sub(i, i), colors.black
 end
 
+M.SCENE_RAMP = {
+    { " ", colors.gray, colors.black },
+    { ".", colors.gray, colors.black },
+    { ":", colors.gray, colors.black },
+    { " ", colors.black, colors.gray },
+    { ":", colors.lightGray, colors.gray },
+    { "#", colors.lightGray, colors.gray },
+    { " ", colors.black, colors.lightGray },
+    { ":", colors.white, colors.lightGray },
+    { ".", colors.lightGray, colors.white },
+    { " ", colors.black, colors.white },
+}
+M.SCENE_CHARS = " .:-=+*#%@"
+M.PASS_NAMES = { [8] = "rough", [4] = "coarse", [2] = "medium", [1] = "fine" }
+
+function M.sceneShade(level, isColor)
+    local i = util.clamp(math.floor(level) + 1, 1, #M.SCENE_RAMP)
+    if isColor then
+        local e = M.SCENE_RAMP[i]
+        return e[1], e[2], e[3]
+    end
+    return M.SCENE_CHARS:sub(i, i), colors.white, colors.black
+end
+
 function Panels:cameraView()
     local cam = self.con.ctx and self.con.ctx.camera
     return cam and cam.view, cam
@@ -502,45 +526,44 @@ function Panels:drawCamera(s, view)
     if W < 50 then rightW = 0 end
     local leftW = W - 2 - (rightW > 0 and rightW + 1 or 0)
     local foot = H
-    local ix, iy, iw, ih = page:card(2, 3, leftW, H - 3, "View from " .. tostring(view.realm), c.accent, tostring(view.status))
+    local scene = view.mode ~= "depth"
+    local ix, iy, iw, ih = page:card(2, 3, leftW, H - 3, (scene and "View from " or "Depth from ") .. tostring(view.realm), c.accent, tostring(view.status))
     if ix then
+        local mod = need("camera")
         local ch = ih
         local cw = math.min(iw, math.max(4, math.floor(ch * 1.6 + 0.5)))
         if cw < ch * 1.6 then ch = math.max(3, math.floor(cw / 1.6 + 0.5)) end
-        local mod0 = need("camera")
-        local capH = math.min(ch, mod0.MAX_H)
-        view.w, view.h = mod0.clampSize(math.floor(capH * 1.6 + 0.5), capH)
+        local capH = math.min(ch, scene and mod.MAX_H or 16)
+        view.w, view.h = mod.clampSize(math.floor(capH * 1.6 + 0.5), capH)
         local f = view.frame
         local ox = ix + math.floor((iw - cw) / 2)
         local oy = iy + math.floor((ih - ch) / 2)
-        if f and f.w and f.h then
-            local mod = need("camera")
+        local grid, any
+        if f and f.w and f.h then grid, any = mod.filled(f) end
+        if any then
+            local cells = scene and mod.shade(grid, f.w, f.h) or grid
             local sx, sy = cw / f.w, ch / f.h
             for y = 1, ch do
                 local fr = math.min(f.h, math.floor((y - 1) / sy) + 1)
-                local line = f.rows and f.rows[fr]
                 for x = 1, cw do
                     local fc = math.min(f.w, math.floor((x - 1) / sx) + 1)
-                    local code = line and line:sub(fc, fc) or ""
-                    if code == "" then
-                        s:text(ox + x - 1, oy + y - 1, ".", c.dim, c.inset)
+                    local v = cells[fr][fc]
+                    local chr, fg, bg
+                    if v == false then
+                        chr, fg, bg = ".", c.dim, c.inset
+                    elseif v < 0 then
+                        chr, fg, bg = " ", colors.white, colors.black
+                    elseif scene then
+                        chr, fg, bg = M.sceneShade(v, s.isColor)
                     else
-                        local d = mod.decode(code)
-                        if d == nil then
-                            s:text(ox + x - 1, oy + y - 1, " ", c.text, colors.black)
-                        else
-                            local chr, bg = M.camShade(d, s.isColor)
-                            s:text(ox + x - 1, oy + y - 1, chr, colors.white, bg)
-                        end
+                        chr, bg = M.camShade(v, s.isColor)
+                        fg = colors.white
                     end
+                    s:text(ox + x - 1, oy + y - 1, chr, fg, bg)
                 end
             end
-            if f.row and f.row >= 1 and f.row < f.h and (f.frames or 0) == 0 then
-                local yy = oy + math.floor((f.row - 1) * sy)
-                s:text(ox + cw, yy, "<", c.warn, c.bg)
-            end
         else
-            page:wrapped(ix, iy, iw, ih, view.err and ("No picture: " .. view.err) or "Waiting for the first rows from " .. tostring(view.realm) .. "...", view.err and c.bad or c.muted)
+            page:wrapped(ix, iy, iw, ih, view.err and ("No picture: " .. view.err) or "Waiting for the first rays from " .. tostring(view.realm) .. "...", view.err and c.bad or c.muted)
         end
     end
     if rightW > 0 then
@@ -554,7 +577,9 @@ function Panels:drawCamera(s, view)
                 { "Status", tostring(view.status), view.err and c.bad or c.ok },
                 { "Camera", r.camera and ("camera " .. (tostring(r.camera):match("(%d+)$") or "")) or "none" },
                 { "Ahead", r.ahead and r.ahead >= 0 and (util.fmtFixed(r.ahead, 1) .. " blocks") or "open" },
-                { "Frames", tostring(f.frames or 0) .. (f.row and f.h and (" row " .. f.row .. "/" .. f.h) or "") },
+                { "Frames", tostring(f.frames or 0) },
+                { "Detail", (f.frames or 0) > 0 and "full" or (M.PASS_NAMES[f.pass] or "-") },
+                { "Scanned", f.total and (math.floor((f.done or 0) * 100 / math.max(1, f.total)) .. "%") or "-" },
                 { "Size", f.w and (f.w .. "x" .. f.h) or "-" },
                 { "Release", tostring(r.rel or "?") },
                 { "Uptime", r.uptime and util.fmtDuration(r.uptime) or "?" },
@@ -568,7 +593,11 @@ function Panels:drawCamera(s, view)
                 row = row + 1
             end
             local ly = py + ph - 3
-            if ly > row then
+            if ly > row and scene then
+                s:field(px, ly, pw, "Lit from above, edges", c.dim, c.inset)
+                s:field(px, ly + 1, pw, "outlined, black = open", c.dim, c.inset)
+                s:field(px, ly + 2, pw, "Right click to close", c.warn, c.inset)
+            elseif ly > row then
                 s:text(px, ly, "near", c.muted, c.inset)
                 local n = s.isColor and #M.CAM_RAMP or #M.CAM_CHARS
                 local bx = px + 5
