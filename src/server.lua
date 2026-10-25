@@ -1207,6 +1207,10 @@ function Server:removeBridge(peer)
     return self.bb:removeBridge(peer)
 end
 
+function Server:bridgeReport()
+    return self.bb:bridgeReport()
+end
+
 function Server:resetBridge(peer)
     return self.bb:resetBridge(peer)
 end

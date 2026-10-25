@@ -1499,8 +1499,25 @@ function Console:bridgesPage()
         end,
         empty = "No bridges. Press a to set one up with two tesseracts and two disk drives.",
         onSelect = function(row) return self:bridgeMenu(row.bridge) end,
-        actions = { { label = "Add", key = "a", run = function() return self:addBridgeFlow() end } },
+        actions = {
+            { label = "Add", key = "a", run = function() return self:addBridgeFlow() end },
+            { label = "Report", key = "r", run = function() return self:bridgeReport() end },
+        },
     })
+end
+
+function Console:bridgeReport()
+    local srv = self.ctx.server
+    local body = self:call(srv, "bridgeReport")
+    if type(body) ~= "string" then return self:result("Bridge Report", false, "Could not build the report.") end
+    local text = "ZELNET BRIDGE REPORT\nserver " .. tostring(self.cfg.realm) .. " #" .. tostring(os.getComputerID and os.getComputerID() or "?") .. " " .. version.label() .. " at " .. tostring(compat.stamp()) .. "\n" .. body
+    util.writeFile("/bridge_report.txt", text)
+    local okA, mod = pcall(need, "airlock")
+    if not okA then return self:result("Bridge Report", false, "Saved /bridge_report.txt; uploading is not available.") end
+    local url, err = self:inTask("Bridge Report", "Uploading " .. #text .. " characters...", function() return mod.upload(text) end)
+    self:audit("bridge_report", tostring(url), url and nil or tostring(err), url ~= nil)
+    if not url then return self:result("Bridge Report", false, "Upload failed (" .. tostring(err) .. "). The report is saved in /bridge_report.txt.") end
+    self:say("Bridge Report", { { text = url, color = self.surf.c.ok }, "Also saved in /bridge_report.txt." })
 end
 
 function Console:bridgeCfg(peer)

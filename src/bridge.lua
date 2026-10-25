@@ -32,6 +32,7 @@ M.MANUAL_LOST = 20
 M.HEAL_LOG_GAP = 600
 M.BOUNCE_FAULT = 5
 M.BOUNCE_RETRY = 2
+M.TRAIL = 150
 
 local VALID_DIR = {}
 for _, d in ipairs(M.DIRECTIONS) do VALID_DIR[d] = true end
@@ -263,6 +264,7 @@ function M.new(bcfg, ctx)
     self.faults = {}
     self.retry = { send = { at = 0, delay = 0 }, recv = { at = 0, delay = 0 } }
     self.bounceRun = { send = 0, recv = 0 }
+    self.trail = util.newRing(M.TRAIL)
     self.full = {}
     self.confirmed = {}
     self.badDirs = {}
@@ -290,7 +292,12 @@ function Bridge:applyTuning()
     self.maxBatch = util.clamp(math.floor(tonumber(c.maxBatch) or M.DEFAULTS.maxBatch), M.BATCH_MIN, M.BATCH_CAP)
 end
 
+function Bridge:trace(text)
+    if self.trail then self.trail.push({ t = compat.now(), s = compat.stamp(), text = text }) end
+end
+
 function Bridge:note(level, text)
+    self:trace(level .. ": " .. text)
     local log = self.log
     if log and log[level] then log[level]("bridge " .. tostring(self.peer or self.cfg.peer) .. ": " .. text) end
 end
@@ -444,10 +451,15 @@ end
 
 function Bridge:tryPull(tess, drive, dir, home)
     local ok, moved = rethrow(pcall(peripheral.call, tess, "pullItem", dir, 1, 1))
-    if M.diskGone(drive) then return true end
+    local gone = M.diskGone(drive)
+    self:trace("pull " .. dir .. " " .. tess .. " from " .. drive .. ": " .. (ok and ("moved " .. tostring(moved)) or ("error " .. tostring(moved))) .. (gone and ", disk left" or ""))
+    if gone then return true end
     if not ok then return false, true end
     compat.sleep(self.settle)
-    if M.diskGone(drive) then return true end
+    if M.diskGone(drive) then
+        self:trace("disk left " .. drive .. " after the settle wait")
+        return true
+    end
     if (tonumber(moved) or 0) > 0 then
         if home then return false, false, true end
         self.badDirs[tess] = self.badDirs[tess] or {}
@@ -729,6 +741,76 @@ function Bridge:sweep(now)
         self:note("info", "failsafe sweep: returning the disk stuck in " .. self.cfg.recvDrive)
         self:serviceReceive(now, true)
     end
+end
+
+local function gearLines(out, label, name, isDrive)
+    if type(name) ~= "string" or name == "" then
+        out[#out + 1] = label .. ": not set"
+        return
+    end
+    if not peripheral.isPresent(name) then
+        out[#out + 1] = label .. " " .. name .. ": NOT FOUND"
+        return
+    end
+    local line = label .. " " .. name .. " (" .. tostring(peripheral.getType(name)) .. ")"
+    if isDrive then
+        if not M.diskIn(name) then
+            line = line .. ": empty"
+        else
+            local mount = M.mountOf(name)
+            line = line .. ": disk id " .. tostring(call(name, "getDiskID")) .. ", label " .. tostring(call(name, "getDiskLabel")) .. ", mount " .. tostring(mount)
+            if mount then
+                local path = mount .. "/" .. M.FILE
+                if fs.exists(path) then
+                    local okS, size = pcall(fs.getSize, path)
+                    line = line .. ", batch file " .. tostring(okS and size or "?") .. " bytes"
+                else
+                    line = line .. ", no batch file"
+                end
+                local okF, free = pcall(fs.getFreeSpace, mount)
+                if okF then line = line .. ", " .. tostring(free) .. " bytes free" end
+            end
+        end
+    else
+        local f = methodSet(name).getFrequency and call(name, "getFrequency")
+        line = line .. ": frequency " .. tostring(f)
+        local ms = methodSet(name)
+        if not ms.pullItem then line = line .. ", NO pullItem" end
+    end
+    out[#out + 1] = line
+end
+
+function Bridge:report(now)
+    now = now or compat.now()
+    local c = self.cfg
+    local out = { "== bridge to " .. tostring(self.peer or c.peer) .. " (from " .. tostring(self.realm) .. ")" }
+    out[#out + 1] = self:snapshot(now)
+    local st = self:status()
+    local keys = {}
+    for k in pairs(st) do keys[#keys + 1] = k end
+    table.sort(keys)
+    local kv = {}
+    for _, k in ipairs(keys) do kv[#kv + 1] = k .. "=" .. tostring(st[k]) end
+    out[#out + 1] = table.concat(kv, " ")
+    out[#out + 1] = "faults: send=" .. tostring(self.faults.send) .. " recv=" .. tostring(self.faults.recv) .. " disk=" .. tostring(self.faults.disk) .. " gear=" .. tostring(self.faults.gear)
+    out[#out + 1] = "retry: send in " .. util.fmtFixed(math.max(0, self.retry.send.at - now), 1) .. "s, recv in " .. util.fmtFixed(math.max(0, self.retry.recv.at - now), 1) .. "s; bounce runs send " .. tostring(self.bounceRun.send) .. " recv " .. tostring(self.bounceRun.recv)
+    out[#out + 1] = "last progress " .. util.fmtFixed(now - self.progressAt, 1) .. "s ago; settle " .. tostring(self.settle) .. " poll " .. tostring(self.poll) .. " maxBatch " .. tostring(self.maxBatch)
+    local fl = self.inflight
+    if fl then out[#out + 1] = "in flight: batch " .. tostring(fl.seq) .. ", " .. #fl.items .. " packets, out " .. util.fmtFixed(now - fl.at, 1) .. "s, disk id " .. tostring(fl.disk) end
+    local bad = {}
+    for tess, dirs in pairs(self.badDirs) do
+        for d in pairs(dirs) do bad[#bad + 1] = tess .. " " .. d end
+    end
+    if #bad > 0 then out[#out + 1] = "skipped sides: " .. table.concat(bad, ", ") end
+    gearLines(out, "send tesseract", c.sendTess, false)
+    gearLines(out, "send drive", c.sendDrive, true)
+    gearLines(out, "receive tesseract", c.recvTess, false)
+    gearLines(out, "receive drive", c.recvDrive, true)
+    out[#out + 1] = "-- recent activity, oldest first"
+    for _, e in ipairs(self.trail.last()) do
+        out[#out + 1] = tostring(e.s) .. " +" .. util.fmtFixed(now - e.t, 1) .. "s ago " .. e.text
+    end
+    return table.concat(out, "\n")
 end
 
 function Bridge:snapshot(now)

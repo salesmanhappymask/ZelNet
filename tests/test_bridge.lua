@@ -125,6 +125,7 @@ local function newWorld()
                     w.bounces = w.bounces - 1
                     return 1
                 end
+                if w.bounceRate and w.rand() < w.bounceRate then return 1 end
                 if w.lose then
                     w.lose = false
                     w.remove(src.name)
@@ -703,6 +704,68 @@ t.case("an occasional bounce is a quiet retry, not a problem", function()
     t.eq(st.errors, 0, "a bounce that cleared must not count as an error")
     t.eq(st.lastError, nil)
     t.eq(st.bounces, 2)
+    w.clear()
+end)
+
+t.case("long two way traffic with random bounces never strands a disk", function()
+    local w = standardWorld()
+    local seed = 12345
+    w.rand = function()
+        seed = (seed * 1103515245 + 12345) % 2147483648
+        return seed / 2147483648
+    end
+    w.bounceRate = 0.15
+    local earth = makeSide("EARTH", earthCfg(), "/earth/config")
+    local mars = makeSide("MARS", marsCfg(), "/mars/config")
+    local N = 300
+    local function unique(list)
+        local seen, n = {}, 0
+        for _, f in ipairs(list) do
+            if not seen[f.id] then seen[f.id] = true n = n + 1 end
+        end
+        return n
+    end
+    runWorld({ earth, mars }, function()
+        for i = 1, N do
+            earth.b:enqueue(wire(i))
+            local m = wire(i, "MARS:5")
+            m.id = "m" .. i
+            mars.b:enqueue(m)
+            sleep(w.rand() * 4)
+        end
+        t.ok(waitFor(function() return unique(mars.got) == N and unique(earth.got) == N end, 1200),
+            "lost packets: mars got " .. unique(mars.got) .. ", earth got " .. unique(earth.got))
+        w.bounceRate = nil
+        t.ok(waitFor(function()
+            return w.drives.drive_0.disk ~= nil and w.drives.drive_2.disk ~= nil and earth.b.inflight == nil and mars.b.inflight == nil
+        end, 300), "a disk did not come home: " .. tostring(earth.b:status().state) .. " / " .. tostring(mars.b:status().state))
+    end, 20000)
+    local es, ms = earth.b:status(), mars.b:status()
+    t.eq(es.fault, nil, es.fault)
+    t.eq(ms.fault, nil, ms.fault)
+    t.eq(es.heals, 0, "earth needed the watchdog")
+    t.eq(ms.heals, 0, "mars needed the watchdog")
+    t.ok(es.bounces > 0 and ms.bounces > 0, "no bounces happened")
+    w.clear()
+end)
+
+t.case("the bridge report shows the gear, the state and recent pulls", function()
+    local w = standardWorld()
+    local earth = makeSide("EARTH", earthCfg(), "/earth/config")
+    local mars = makeSide("MARS", marsCfg(), "/mars/config")
+    w.bounces = 1
+    earth.b:enqueue(wire(1))
+    local text
+    runWorld({ earth, mars }, function()
+        t.ok(waitFor(function() return #mars.got == 1 and w.drives.drive_0.disk ~= nil end, 200), "the packet never crossed")
+        text = earth.b:report()
+    end)
+    t.ok(text:find("== bridge to MARS (from EARTH)", 1, true), text)
+    t.ok(text:find("send tesseract tesseract_0 (cofh_thermalexpansion_tesseract): frequency 1", 1, true), text)
+    t.ok(text:find("send drive drive_0 (drive): disk id", 1, true), text)
+    t.ok(text:find("receive drive drive_1 (drive): empty", 1, true), text)
+    t.ok(text:find("pull east tesseract_0 from drive_0: moved 1, disk left", 1, true), text)
+    t.ok(text:find("handed it back", 1, true), text)
     w.clear()
 end)
 

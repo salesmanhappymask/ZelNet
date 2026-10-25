@@ -676,8 +676,38 @@ function Panels:pushLogs()
     if self.n and self.n.spawn then self.n:spawn(job, "airlock-logs") else job() end
 end
 
+function Panels:pushBridgeReport()
+    if self.bridgeBusy then return end
+    local srv = self.con.ctx.server
+    local okA, mod = pcall(need, "airlock")
+    if not srv or not okA then return end
+    self.bridgeBusy = true
+    self.bridgeStatus = { text = "Building the bridge report...", kind = "warn" }
+    local function job()
+        local ok, err = pcall(function()
+            local body = self.con:call(srv, "bridgeReport")
+            if type(body) ~= "string" then error("could not build the report", 0) end
+            local text = "ZELNET BRIDGE REPORT\nserver " .. tostring(self.cfg.realm) .. " #" .. tostring(os.getComputerID and os.getComputerID() or "?") .. " " .. version.label() .. " at " .. tostring(compat.stamp()) .. "\n" .. body
+            util.writeFile("/bridge_report.txt", text)
+            self.bridgeStatus = { text = "Uploading " .. #text .. " characters...", kind = "warn" }
+            local url, uerr = mod.upload(text)
+            if url then
+                self.con:audit("bridge_report", url, #text .. " bytes", true)
+                self.bridgeStatus = { text = "Report: " .. url, kind = "ok" }
+            else
+                self.bridgeStatus = { text = "Upload failed (" .. tostring(uerr) .. "); saved /bridge_report.txt", kind = "bad" }
+            end
+        end)
+        if not ok then self.bridgeStatus = { text = "Bridge report failed: " .. tostring(err), kind = "bad" } end
+        self.bridgeBusy = false
+        os.queueEvent("zn_panel")
+    end
+    if self.n and self.n.spawn then self.n:spawn(job, "bridge-report") else job() end
+end
+
 function Panels:consoleAction(act)
     if act == "airlock:logs" then return self:pushLogs() end
+    if act == "bridge:report" then return self:pushBridgeReport() end
     local tab = act:match("^tab:(.+)$")
     if tab then
         self.tab = tab
@@ -919,6 +949,12 @@ function Panels:tab_bridges(page, area)
             quiet = quiet,
         }
     end
+    local foot = area.y + area.h - 1
+    local label = self.bridgeBusy and " Working... " or " Push report "
+    page:button(area.x, foot, #label, 1, label, self.bridgeBusy and c.div or c.brand, c.text, "bridge:report")
+    local bst = self.bridgeStatus
+    if bst then page.s:field(area.x + #label + 1, foot, area.w - #label - 1, bst.text, c[bst.kind] or c.text, c.bg) end
+    area = { x = area.x, y = area.y, w = area.w, h = area.h - 2 }
     local cols = area.w >= 78 and 2 or 1
     local cardW = math.floor((area.w - (cols - 1)) / cols)
     local cardH = 14

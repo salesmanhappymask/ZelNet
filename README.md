@@ -56,6 +56,7 @@ A bridge uses two tesseracts and two disk drives on each side, exactly like TekB
 * Your **send** tesseract and the peer's **receive** tesseract share one frequency; your **receive** tesseract and the peer's **send** tesseract share another. Set them to send and receive items.
 * Each tesseract touches one disk drive. Put one blank pocket computer in your send drive and one in the peer's send drive to start. A pocket computer carries up to about 1 MB per trip; floppy disks still work but carry only 125 KB.
 * The console's Bridges page finds the gear and probes the directions for you.
+* **Bridge report.** Press **r** on the terminal's Bridges page, or **Push report** on the console monitor's Bridges tab. The server uploads every bridge's state, faults and retry timers, what is in each drive (disk id, label, batch file), each tesseract's frequency and the last 150 steps the bridge took, including every pull and what it moved, to paste.rs and shows the address. A copy is saved in `/bridge_report.txt`.
 
 ### BitNet towers
 

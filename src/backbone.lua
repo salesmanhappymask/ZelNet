@@ -737,6 +737,19 @@ function Backbone:removeBridge(peer)
     return true
 end
 
+function Backbone:bridgeReport()
+    local out = {}
+    for _, peer in ipairs(util.sortedKeys(self.bridgeSet)) do
+        local entry = self.bridgeSet[peer]
+        local ok, text = pcall(entry.obj.report, entry.obj)
+        local nb = self.neighbors["bridge:" .. peer]
+        out[#out + 1] = ""
+        out[#out + 1] = "link " .. ((nb and nb.up) and "up" or "down") .. ", task restarts " .. tostring(entry.restarts)
+        out[#out + 1] = ok and text or ("== bridge to " .. peer .. ": report failed: " .. tostring(text))
+    end
+    return table.concat(out, "\n")
+end
+
 function Backbone:resetBridge(peer)
     local entry = self.bridgeSet[util.normRealm(peer) or ""]
     if not entry or entry.removed then return nil, "no bridge to " .. tostring(peer) end
