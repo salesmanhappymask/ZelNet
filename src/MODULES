@@ -16,6 +16,7 @@ storage
 registry
 directory
 bridge
+bridgepair
 backbone
 server
 tekmail

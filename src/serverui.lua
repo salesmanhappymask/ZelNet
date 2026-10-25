@@ -1571,9 +1571,89 @@ function Console:bridgeMenu(b)
     return nil
 end
 
+function Console:pairTask(title, fn)
+    local job = { done = false, text = "Starting..." }
+    local opts = {
+        progress = function(t)
+            job.text = tostring(t)
+            os.queueEvent("zn_pair_progress")
+        end,
+        cancelled = function() return job.cancel == true end,
+    }
+    local function body()
+        job.r = packn(pcall(fn, opts))
+        job.done = true
+        os.queueEvent("zn_pair_progress")
+    end
+    local n = self.n
+    if n and n.running then
+        self.noLock = self.noLock + 1
+        n:spawn(body, "bridge-pair")
+        while not job.done do
+            ui.busy(self.surf, title, job.text .. (job.cancel and " Cancelling..." or " Press any key to cancel."))
+            local ev = os.pullEvent()
+            if ev == "key" or ev == "char" or ev == "mouse_click" or ev == "monitor_touch" then job.cancel = true end
+        end
+        self.noLock = math.max(0, self.noLock - 1)
+    else
+        body()
+    end
+    if not job.r[1] then return nil, tostring(job.r[2]) end
+    return compat.unpack(job.r, 2, job.r.n)
+end
+
+function Console:savePairedBridge(bcfg)
+    local srv = self.ctx.server
+    if self:bridgeCfg(bcfg.peer) then self:call(srv, "removeBridge", bcfg.peer) end
+    local ok, err = self:call(srv, "addBridge", bcfg)
+    self:audit("bridge_pair", tostring(bcfg.peer), err, ok)
+    return ok, err
+end
+
+function Console:pairBridgeFlow(mode)
+    local okP, pair = pcall(need, "bridgepair")
+    if not okP then return self:result("Add Bridge", false, "The bridge pairing module is missing.") end
+    local title = mode == "run" and "Run Setup" or "Setup Mode"
+    local gear = pair.freeGear(self.cfg)
+    local intro
+    if mode == "run" then
+        intro = "Free here: tesseracts " .. (#gear.tesseracts > 0 and table.concat(gear.tesseracts, ", ") or "none") .. "; drives " .. (#gear.drives > 0 and table.concat(gear.drives, ", ") or "none") .. ". Put a blank pocket computer in each of the two new drives. The other server must be in setup mode with its two drives empty and its tesseracts on the same two frequencies."
+    else
+        intro = "Free here: tesseracts " .. (#gear.tesseracts > 0 and table.concat(gear.tesseracts, ", ") or "none") .. "; drives " .. (#gear.drives > 0 and table.concat(gear.drives, ", ") or "none") .. ". Leave both drives empty. This server waits until the other server runs setup, answers it and starts the bridge."
+    end
+    if not ui.confirm(self.surf, title, intro, { yes = "Start", no = "Cancel" }) then return nil end
+    local bcfg, err = self:pairTask(title, function(opts)
+        if mode == "run" then return pair.initiate(self.cfg, opts) end
+        return pair.listen(self.cfg, opts)
+    end)
+    if not bcfg then
+        if err == "cancelled" then return nil end
+        return self:result(title, false, err)
+    end
+    local ok, serr = self:savePairedBridge(bcfg)
+    if not ok then return self:result(title, false, serr) end
+    local lines = {
+        { text = "The bridge to " .. bcfg.peer .. " is set up and running.", color = self.surf.c.ok },
+        "Send: " .. bcfg.sendTess .. " " .. bcfg.sendDrive .. " " .. tostring(bcfg.sendDir or "found on the first trip"),
+        "Receive: " .. bcfg.recvTess .. " " .. bcfg.recvDrive .. " " .. tostring(bcfg.recvDir),
+    }
+    if type(err) == "table" and err.freqSend ~= nil then
+        lines[#lines + 1] = "Frequencies: send " .. tostring(err.freqSend) .. ", receive " .. tostring(err.freqRecv) .. "."
+    end
+    self:say(title, lines)
+    return nil
+end
+
 function Console:addBridgeFlow()
     local mod = self:bridgeModule()
     if not mod then return self:result("Add Bridge", false, "The bridge module is missing.") end
+    local how = self:choose("Add Bridge", "How do you want to set it up?", {
+        { label = "Run setup", hint = "both disks here", value = "run" },
+        { label = "Wait for the other side", hint = "setup mode", value = "listen" },
+        { label = "Set up by hand", hint = "pick each part", value = "manual" },
+    })
+    if not how then return nil end
+    if how ~= "manual" then return self:pairBridgeFlow(how) end
     local bcfg = M.bridgeWizard(self.surf, self.cfg, function(title, text, fn) return self:inTask(title, text, fn) end, mod)
     if not bcfg then return nil end
     local ok, err = self:call(self.ctx.server, "addBridge", bcfg)

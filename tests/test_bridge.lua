@@ -2,6 +2,7 @@ package.path = "./?.lua;" .. package.path
 local env = require("tests.fakecc").install({ id = 7 })
 local need = require("tools.devload").make(".")
 local bridge = need("bridge")
+local pair = need("bridgepair")
 local codec = need("codec")
 local crypto = need("crypto")
 local config = need("config")
@@ -764,6 +765,147 @@ t.case("a bounce shows as a fault until the disk gets through", function()
     local st = earth.b:status()
     t.ok(st.fault:find("handed it back", 1, true), st.fault)
     t.ok(st.lastErrorAge ~= nil, "the error has no age")
+    w.clear()
+end)
+
+local function pairCfg(realm, key)
+    local cfg = config.newServer({ realm = realm, network = "Test" })
+    cfg.backboneKey = key
+    return cfg
+end
+
+local EARTH_GEAR = { drives = { "drive_0", "drive_1" }, tesseracts = { "tesseract_0", "tesseract_1" } }
+local MARS_GEAR = { drives = { "drive_2", "drive_3" }, tesseracts = { "tesseract_2", "tesseract_3" } }
+
+local function runPair(earthFn, marsFn, limit)
+    local er, ee, mr, me
+    local done = 0
+    env.run(function()
+        local tasks = {
+            { co = coroutine.create(function() mr, me = marsFn() done = done + 1 end) },
+            { co = coroutine.create(function() sleep(2) er, ee = earthFn() done = done + 1 end) },
+        }
+        local ev = {}
+        local first = true
+        while done < 2 do
+            for _, task in ipairs(tasks) do
+                if coroutine.status(task.co) == "suspended" and (first or task.filter == nil or task.filter == ev[1]) then
+                    local ok, f = coroutine.resume(task.co, unpack(ev))
+                    if not ok then error(f, 0) end
+                    task.filter = f
+                end
+            end
+            first = false
+            if done >= 2 then break end
+            ev = { os.pullEventRaw() }
+        end
+    end, limit or 900)
+    return er, ee, mr, me
+end
+
+t.case("pairing finds every part on both sides and the bridge then runs", function()
+    local w = standardWorld({ noDisks = true })
+    w.insert("drive_0")
+    w.insert("drive_1")
+    local key = crypto.newKey()
+    local ecfg, mcfg = pairCfg("EARTH", key), pairCfg("MARS", key)
+    local eb, ee, mb, me = runPair(
+        function() return pair.initiate(ecfg, { gear = EARTH_GEAR, wait = 60 }) end,
+        function() return pair.listen(mcfg, { gear = MARS_GEAR, wait = 120 }) end)
+    t.ok(eb, tostring(ee))
+    t.ok(mb, tostring(me))
+    t.eq(eb.peer, "MARS")
+    t.eq(eb.sendTess, "tesseract_0")
+    t.eq(eb.sendDrive, "drive_0")
+    t.eq(eb.sendDir, "east")
+    t.eq(eb.recvTess, "tesseract_1")
+    t.eq(eb.recvDrive, "drive_1")
+    t.eq(eb.recvDir, "up")
+    t.eq(mb.peer, "EARTH")
+    t.eq(mb.recvTess, "tesseract_3")
+    t.eq(mb.recvDrive, "drive_3")
+    t.eq(mb.recvDir, "down")
+    t.eq(mb.sendTess, "tesseract_2")
+    t.eq(mb.sendDrive, "drive_2")
+    t.ok(w.drives.drive_0.disk ~= nil and w.drives.drive_2.disk ~= nil, "each side should hold one disk in its send drive")
+    t.eq(w.drives.drive_1.disk, nil)
+    t.eq(w.drives.drive_3.disk, nil)
+    t.eq(w.files("drive_0")[pair.FILE], nil, "the pairing note must be wiped")
+    t.eq(w.files("drive_2")[pair.FILE], nil, "the pairing note must be wiped")
+    local earth = makeSide("EARTH", eb, "/earth/config")
+    local mars = makeSide("MARS", mb, "/mars/config")
+    earth.b:enqueue(wire(1))
+    local back = wire(2, "MARS:5")
+    back.id = "m2"
+    mars.b:enqueue(back)
+    runWorld({ earth, mars }, function()
+        t.ok(waitFor(function() return #mars.got == 1 and #earth.got == 1 end, 200), "packets did not cross the paired bridge")
+    end)
+    t.eq(mars.bcfg.sendDir, "west", "the send side of mars should be found on its first trip")
+    w.clear()
+end)
+
+t.case("pairing follows whichever disk leaves first", function()
+    local w = standardWorld({ noDisks = true })
+    w.insert("drive_0")
+    w.insert("drive_1")
+    local key = crypto.newKey()
+    local ecfg, mcfg = pairCfg("EARTH", key), pairCfg("MARS", key)
+    local gear = { drives = { "drive_0", "drive_1" }, tesseracts = { "tesseract_1", "tesseract_0" } }
+    local eb, ee, mb, me = runPair(
+        function() return pair.initiate(ecfg, { gear = gear, wait = 60 }) end,
+        function() return pair.listen(mcfg, { gear = MARS_GEAR, wait = 120 }) end)
+    t.ok(eb, tostring(ee))
+    t.ok(mb, tostring(me))
+    t.eq(eb.sendDrive, "drive_1")
+    t.eq(eb.sendTess, "tesseract_1")
+    t.eq(eb.recvDrive, "drive_0")
+    t.eq(mb.recvDrive, "drive_2")
+    t.eq(mb.recvTess, "tesseract_2")
+    t.eq(mb.sendDrive, "drive_3")
+    t.eq(mb.sendTess, "tesseract_3")
+    local earth = makeSide("EARTH", eb, "/earth/config")
+    local mars = makeSide("MARS", mb, "/mars/config")
+    earth.b:enqueue(wire(1))
+    local back = wire(2, "MARS:5")
+    back.id = "m2"
+    mars.b:enqueue(back)
+    runWorld({ earth, mars }, function()
+        t.ok(waitFor(function() return #mars.got == 1 and #earth.got == 1 end, 200), "packets did not cross the paired bridge")
+    end)
+    w.clear()
+end)
+
+t.case("pairing refuses a server from another network", function()
+    local w = standardWorld({ noDisks = true })
+    w.insert("drive_0")
+    w.insert("drive_1")
+    local ecfg, mcfg = pairCfg("EARTH", crypto.newKey()), pairCfg("MARS", crypto.newKey())
+    local eb, ee, mb, me = runPair(
+        function() return pair.initiate(ecfg, { gear = EARTH_GEAR, wait = 20 }) end,
+        function() return pair.listen(mcfg, { gear = MARS_GEAR, wait = 40 }) end)
+    t.eq(eb, nil)
+    t.ok(tostring(ee):find("did not answer", 1, true), tostring(ee))
+    t.eq(mb, nil)
+    t.ok(tostring(me):find("no pocket computer arrived", 1, true), tostring(me))
+    t.eq(w.files("drive_1")[pair.FILE], nil, "the unsent disk's note must be wiped")
+    w.clear()
+end)
+
+t.case("pairing leaves the gear of existing bridges alone", function()
+    local cfg = pairCfg("EARTH", crypto.newKey())
+    cfg.bridges = { { peer = "ATHENA", sendTess = "tesseract_7", sendDrive = "drive_28", recvTess = "tesseract_6", recvDrive = "drive_27" } }
+    local used = pair.usedGear(cfg)
+    for _, n in ipairs({ "tesseract_7", "drive_28", "tesseract_6", "drive_27" }) do t.ok(used[n], n .. " is not marked as used") end
+end)
+
+t.case("run setup needs exactly two loaded drives", function()
+    local w = standardWorld({ noDisks = true })
+    w.insert("drive_0")
+    local r, err
+    env.run(function() r, err = pair.initiate(pairCfg("EARTH", crypto.newKey()), { gear = EARTH_GEAR, wait = 5 }) end, 30)
+    t.eq(r, nil)
+    t.ok(tostring(err):find("found 1 free drive", 1, true), tostring(err))
     w.clear()
 end)
 
