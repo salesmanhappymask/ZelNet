@@ -30,8 +30,6 @@ M.ADDR_MAX = 32
 M.STALL = 90
 M.MANUAL_LOST = 20
 M.HEAL_LOG_GAP = 600
-M.BOUNCE_FAULT = 5
-M.BOUNCE_RETRY = 2
 M.TRAIL = 150
 
 local VALID_DIR = {}
@@ -263,7 +261,6 @@ function M.new(bcfg, ctx)
     self.seen = util.newSeenSet(M.SEEN_TTL, 400)
     self.faults = {}
     self.retry = { send = { at = 0, delay = 0 }, recv = { at = 0, delay = 0 } }
-    self.bounceRun = { send = 0, recv = 0 }
     self.trail = util.newRing(M.TRAIL)
     self.full = {}
     self.confirmed = {}
@@ -333,18 +330,6 @@ function Bridge:recover(side)
         r.at = 0
     end
     self.full[side] = nil
-    if self.bounceRun[side] then self.bounceRun[side] = 0 end
-end
-
-function Bridge:bounced(side, why)
-    local n = self.bounceRun[side] + 1
-    self.bounceRun[side] = n
-    if n >= M.BOUNCE_FAULT then
-        self:setFault(side, why .. " (" .. M.BOUNCE_FAULT .. " times in a row)", true)
-        return
-    end
-    self:note("info", why)
-    self.retry[side].at = compat.now() + M.BOUNCE_RETRY
 end
 
 function Bridge:gearProblem()
@@ -500,7 +485,7 @@ function Bridge:eject(tess, drive, dirKey, full)
         end
         if bounced then
             self.stats.bounces = (self.stats.bounces or 0) + 1
-            return false, "the tesseract took the disk from " .. drive .. " and handed it back: the other side could not take it just now (its drive is busy, its chunk is not loaded, or a tesseract changed); trying again", true
+            return false, "the tesseract took the disk from " .. drive .. " and handed it back: the other side could not take it just now (its drive is busy, its chunk is not loaded, or a tesseract changed); trying again"
         end
         prev = not failed and d or nil
     end
@@ -592,11 +577,7 @@ function Bridge:serviceReceive(now, force)
         self:notice("returning an item in " .. drive .. " that is not a pocket computer or floppy")
     end
     if not accepted then self.stats.returned = self.stats.returned + 1 end
-    local ok, why, bounce = self:eject(c.recvTess, drive, "recvDir", force or self.full.recv)
-    if not ok and bounce then
-        self:bounced("recv", "cannot return the bridge disk to " .. tostring(self.peer) .. ": " .. why)
-        return false
-    end
+    local ok, why = self:eject(c.recvTess, drive, "recvDir", force or self.full.recv)
     if not ok then
         self:setFault("recv", "cannot return the bridge disk to " .. tostring(self.peer) .. ": " .. why, true)
         return false
@@ -682,12 +663,12 @@ function Bridge:sendBatch(drive, diskId, now)
     self.state = "sending"
     self.outgoing = items
     self:labelDisk(drive)
-    local sent, why, bounce = self:eject(self.cfg.sendTess, drive, "sendDir", self.full.send)
+    local sent, why = self:eject(self.cfg.sendTess, drive, "sendDir", self.full.send)
     self.outgoing = nil
     if not sent then
         pcall(fs.delete, path)
         self:putBack(items, false)
-        if bounce then self:bounced("send", why) else self:setFault("send", why, true) end
+        self:setFault("send", why, true)
         return false
     end
     self.inflight = { seq = self.seq, items = items, at = now, disk = diskId, bytes = #text }
@@ -793,7 +774,7 @@ function Bridge:report(now)
     for _, k in ipairs(keys) do kv[#kv + 1] = k .. "=" .. tostring(st[k]) end
     out[#out + 1] = table.concat(kv, " ")
     out[#out + 1] = "faults: send=" .. tostring(self.faults.send) .. " recv=" .. tostring(self.faults.recv) .. " disk=" .. tostring(self.faults.disk) .. " gear=" .. tostring(self.faults.gear)
-    out[#out + 1] = "retry: send in " .. util.fmtFixed(math.max(0, self.retry.send.at - now), 1) .. "s, recv in " .. util.fmtFixed(math.max(0, self.retry.recv.at - now), 1) .. "s; bounce runs send " .. tostring(self.bounceRun.send) .. " recv " .. tostring(self.bounceRun.recv)
+    out[#out + 1] = "retry: send in " .. util.fmtFixed(math.max(0, self.retry.send.at - now), 1) .. "s, recv in " .. util.fmtFixed(math.max(0, self.retry.recv.at - now), 1) .. "s; bounces " .. tostring(self.stats.bounces or 0)
     out[#out + 1] = "last progress " .. util.fmtFixed(now - self.progressAt, 1) .. "s ago; settle " .. tostring(self.settle) .. " poll " .. tostring(self.poll) .. " maxBatch " .. tostring(self.maxBatch)
     local fl = self.inflight
     if fl then out[#out + 1] = "in flight: batch " .. tostring(fl.seq) .. ", " .. #fl.items .. " packets, out " .. util.fmtFixed(now - fl.at, 1) .. "s, disk id " .. tostring(fl.disk) end
@@ -839,7 +820,6 @@ function Bridge:reset(now, why)
     end
     for _, side in ipairs({ "send", "recv", "disk" }) do self.faults[side] = nil end
     self.retry = { send = { at = 0, delay = 0 }, recv = { at = 0, delay = 0 } }
-    self.bounceRun = { send = 0, recv = 0 }
     self.full = {}
     self.badDirs = {}
     self.confirmed = {}

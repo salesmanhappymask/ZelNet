@@ -690,23 +690,6 @@ t.case("a tesseract that hands the disk back is retried, not blacklisted", funct
     w.clear()
 end)
 
-t.case("an occasional bounce is a quiet retry, not a problem", function()
-    local w = standardWorld()
-    local earth = makeSide("EARTH", earthCfg(), "/earth/config")
-    local mars = makeSide("MARS", marsCfg(), "/mars/config")
-    w.bounces = 2
-    earth.b:enqueue(wire(1))
-    runWorld({ earth, mars }, function()
-        t.ok(waitFor(function() return #mars.got == 1 end, 200), "the packet never crossed after the bounces")
-    end)
-    local st = earth.b:status()
-    t.eq(st.fault, nil)
-    t.eq(st.errors, 0, "a bounce that cleared must not count as an error")
-    t.eq(st.lastError, nil)
-    t.eq(st.bounces, 2)
-    w.clear()
-end)
-
 t.case("long two way traffic with random bounces never strands a disk", function()
     local w = standardWorld()
     local seed = 12345
@@ -769,7 +752,7 @@ t.case("the bridge report shows the gear, the state and recent pulls", function(
     w.clear()
 end)
 
-t.case("bounces that keep happening become a fault", function()
+t.case("a bounce shows as a fault until the disk gets through", function()
     local w = standardWorld()
     local earth = makeSide("EARTH", earthCfg(), "/earth/config")
     local mars = makeSide("MARS", marsCfg(), "/mars/config")
